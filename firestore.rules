@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for zero-trust and admin verification
+    function isServiceAccount() {
+      // Escrita autorizada apenas para tokens com custom claim de admin ou Cloud Functions com Admin SDK (bypass nativo)
+      return request.auth != null && request.auth.token.admin == true;
+    }
+
+    // 1. Coleção de Categorias: Leitura 100% pública, escrita bloqueada no client
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // 2. Coleção de Produtos: Leitura pública para itens ativos, escrita bloqueada no client
+    match /products/{productId} {
+      allow read: if resource.data.isActive == true;
+      allow write: if false;
+
+      // Subcoleção de Ofertas de Lojas (Amazon, Mercado Livre, Shopee, Magalu, KaBuM)
+      match /store_offers/{offerId} {
+        allow read: if true;
+        allow write: if false;
+      }
+
+      // Subcoleção de Histórico de Preços dos últimos 6 meses
+      match /price_history/{historyId} {
+        allow read: if true;
+        allow write: if false;
+      }
+    }
+
+    // 3. Coleção de Cupons de Desconto: Leitura pública para cupons ativos, escrita bloqueada no client
+    match /coupons/{couponId} {
+      allow read: if resource.data.isActive == true;
+      allow write: if false;
+    }
+
+    // 4. Coleção de Alertas de Preço de Usuários: Acesso restrito ao próprio usuário autenticado
+    match /users/{userId}/priceAlerts/{productId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /price_alerts/{alertId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null 
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.targetPrice is number
+                    && request.resource.data.targetPrice > 0;
+      allow update, delete: if request.auth != null && request.auth.uid == resource.data.userId;
+    }
+
+    // 5. Coleção de Favoritos de Usuários (users/{userId}/favorites/{productId}): Acesso restrito ao próprio usuário autenticado
+    match /users/{userId}/favorites/{productId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /user_favorites/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // 6. Analytics de Busca e Cliques: Acesso restrito via Backend
+    match /search_analytics/{docId} {
+      allow read: if isServiceAccount();
+      allow write: if false; // Inserido exclusivamente via Cloud Function com Rate Limiting
+    }
+
+    // 7. Bloqueio padrão para qualquer outra rota não mapeada
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
