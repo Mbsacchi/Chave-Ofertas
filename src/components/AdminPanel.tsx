@@ -15,7 +15,8 @@ import {
   updatePublishedProduct,
   removeStoreOfferFromProduct,
   addOfferToExistingProduct,
-  fetchAllGlobalProducts
+  fetchAllGlobalProducts,
+  syncAwinOffers
 } from '../services/adminService';
 import { DraftProduct, Product, StoreId } from '../types';
 import { fuzzyMatch } from '../lib/search/fuzzyMatch';
@@ -112,6 +113,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [manualCategoryId, setManualCategoryId] = useState(CATEGORIES_TREE[0]?.id || 'eletronicos');
   const [manualFreeShipping, setManualFreeShipping] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSyncingAwin, setIsSyncingAwin] = useState(false);
 
   // Table Filters & Sorting state (Vitrine Publicada)
   const [tableCategoryFilter, setTableCategoryFilter] = useState('all');
@@ -573,6 +575,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  // Synchronize deals & coupons from Awin Affiliate Network
+  const handleSyncAwin = async () => {
+    setIsSyncingAwin(true);
+    try {
+      const result = await syncAwinOffers();
+      showFeedback('success', result.message || `${result.count} ofertas da rede Awin sincronizadas com sucesso!`);
+      await loadDraftsAndProducts();
+    } catch (err: any) {
+      showFeedback('error', err.message || 'Erro ao sincronizar ofertas da Awin.');
+    } finally {
+      setIsSyncingAwin(false);
+    }
+  };
+
   // Update Draft Fields in Staging
   const handleUpdateDraftField = async (id: string, field: keyof DraftProduct, value: any) => {
     try {
@@ -957,25 +973,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   )}
                 </div>
 
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={handleSearchChange}
-                    placeholder="Buscar produto existente... (Ex: playstatin, iphne, jbl, samsung...)"
-                    className="w-full pl-10 pr-10 py-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
-                  />
-                  <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-4" />
-                  {searchQuery && (
-                    <button
-                      type="button"
-                      onClick={handleClearForm}
-                      className="absolute right-3.5 top-3.5 p-1 rounded-lg text-slate-500 hover:text-white transition-colors"
-                      title="Limpar campo de busca"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={handleSearchChange}
+                      placeholder="Buscar produto existente... (Ex: playstatin, iphne, jbl, samsung...)"
+                      className="w-full pl-10 pr-10 py-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
+                    />
+                    <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-4" />
+                    {searchQuery && (
+                      <button
+                        type="button"
+                        onClick={handleClearForm}
+                        className="absolute right-3.5 top-3.5 p-1 rounded-lg text-slate-500 hover:text-white transition-colors"
+                        title="Limpar campo de busca"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* BOTÃO DE SINCRONIZAÇÃO AWIN */}
+                  <button
+                    type="button"
+                    onClick={handleSyncAwin}
+                    disabled={isSyncingAwin}
+                    className="py-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition-all shadow-lg shadow-amber-400/20 active:scale-98 disabled:opacity-50 shrink-0"
+                    title="Sincronizar ofertas e cupons da rede de afiliados Awin"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isSyncingAwin ? 'animate-spin' : ''}`} />
+                    <span>{isSyncingAwin ? 'Sincronizando...' : 'Sincronizar Ofertas Awin'}</span>
+                  </button>
                 </div>
 
                 {/* Floating Autocomplete Dropdown */}
