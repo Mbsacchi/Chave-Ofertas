@@ -1,18 +1,6 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { DraftProduct, Product, StoreOffer } from '../types';
-
-export interface MercadoLivreSearchResult {
-  id: string;
-  title: string;
-  price: number;
-  original_price: number | null;
-  thumbnail: string;
-  permalink: string;
-  shipping: {
-    free_shipping: boolean;
-  };
-  condition: string;
-}
+import { DraftProduct, Product, StoreOffer, StoreId } from '../types';
+import { CATEGORIES_TREE } from '../data/mockData';
 
 // Local authenticated session cache for fallback when Supabase tables are initializing
 const LOCAL_DRAFTS_STORAGE_KEY = 'chave_ofertas_admin_drafts_v1';
@@ -61,69 +49,6 @@ const requireAuthSession = async (): Promise<string> => {
     throw new Error('Acesso negado: Sessão de administrador ausente ou expirada.');
   }
   return session.user.id;
-};
-
-/**
- * Searches the public Mercado Livre API directly on the client side using JSONP
- * to bypass CORS restrictions and datacenter IP blocks.
- */
-export const searchMercadoLivreAPI = (query: string): Promise<MercadoLivreSearchResult[]> => {
-  if (!query.trim()) return Promise.resolve([]);
-
-  return new Promise((resolve, reject) => {
-    const callbackName = `ml_jsonp_cb_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    const script = document.createElement('script');
-
-    const cleanup = () => {
-      if (document.body.contains(script)) {
-        document.body.removeChild(script);
-      }
-      delete (window as any)[callbackName];
-    };
-
-    // Timeout guard (10 seconds)
-    const timeoutId = setTimeout(() => {
-      cleanup();
-      reject(new Error('Tempo limite esgotado ao consultar o Mercado Livre via JSONP.'));
-    }, 10000);
-
-    // Define global callback handler
-    (window as any)[callbackName] = (data: any) => {
-      clearTimeout(timeoutId);
-      cleanup();
-
-      if (!data) {
-        return resolve([]);
-      }
-
-      // Support direct results or wrapped Mercado Livre JSONP format: [status, headers, body]
-      const results = Array.isArray(data) && data.length > 2 && data[2]?.results
-        ? data[2].results
-        : (data.results || (Array.isArray(data) ? data : []));
-
-      const mapped: MercadoLivreSearchResult[] = results.map((item: any) => ({
-        id: item.id,
-        title: item.title,
-        price: item.price || 0,
-        original_price: item.original_price || null,
-        thumbnail: item.thumbnail ? item.thumbnail.replace('http://', 'https://').replace('-I.jpg', '-O.webp') : '',
-        permalink: item.permalink || `https://produto.mercadolivre.com.br/MLB-${item.id}`,
-        shipping: { free_shipping: Boolean(item.shipping?.free_shipping) },
-        condition: item.condition || 'new',
-      }));
-
-      resolve(mapped);
-    };
-
-    script.onerror = () => {
-      clearTimeout(timeoutId);
-      cleanup();
-      reject(new Error('Falha ao carregar script JSONP do Mercado Livre.'));
-    };
-
-    script.src = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query.trim())}&callback=${callbackName}`;
-    document.body.appendChild(script);
-  });
 };
 
 /**
@@ -218,22 +143,20 @@ export const addDraftProduct = async (
       });
 
       if (error) {
-        console.warn('Supabase insert failed, saving locally:', error);
+        console.warn('Supabase insert draft warning:', error.message);
       }
     } catch (err) {
-      console.warn('Supabase exception on addDraftProduct:', err);
+      console.warn('Supabase draft insertion exception, saving locally:', err);
     }
   }
 
-  // Always update local cache
   const drafts = getStoredDrafts();
   saveStoredDrafts([newDraft, ...drafts]);
-
   return newDraft;
 };
 
 /**
- * Updates a draft product
+ * Updates an existing draft product in staging
  */
 export const updateDraftProduct = async (
   id: string,
@@ -257,9 +180,10 @@ export const updateDraftProduct = async (
       if (patch.promotionalPrice !== undefined) dbPayload.promotional_price = patch.promotionalPrice;
       if (patch.discountPercent !== undefined) dbPayload.discount_percent = patch.discountPercent;
       if (patch.affiliateUrl !== undefined) dbPayload.affiliate_url = patch.affiliateUrl;
+      if (patch.storeId !== undefined) dbPayload.store_id = patch.storeId;
+      if (patch.storeName !== undefined) dbPayload.store_name = patch.storeName;
       if (patch.freeShipping !== undefined) dbPayload.free_shipping = patch.freeShipping;
       if (patch.installment !== undefined) dbPayload.installment = patch.installment;
-      if (patch.status !== undefined) dbPayload.status = patch.status;
 
       await supabase.from('draft_products').update(dbPayload).eq('id', id);
     } catch (err) {
@@ -419,6 +343,161 @@ export const publishDraftToVitrine = async (draft: DraftProduct): Promise<Produc
   // Remove from local drafts
   const drafts = getStoredDrafts();
   saveStoredDrafts(drafts.filter(d => d.id !== draft.id));
+
+  return newProduct;
+};
+
+/**
+ * Creates and publishes a product directly to the vitrine from the Manual Form
+ */
+export const createAndPublishManualProduct = async (data: {
+  title: string;
+  price: number;
+  originalPrice?: number;
+  imageUrl: string;
+  affiliateUrl: string;
+  brand?: string;
+  description?: string;
+  categoryId?: string;
+  categoryName?: string;
+  subcategoryId?: string;
+  subcategoryName?: string;
+  storeName?: string;
+  storeId?: StoreId;
+  freeShipping?: boolean;
+}): Promise<Product> => {
+  await requireAuthSession();
+
+  if (!data.title.trim()) throw new Error('Por favor, informe o Título do Produto.');
+  if (!data.price || data.price <= 0) throw new Error('Por favor, informe um Preço válido.');
+  if (!data.imageUrl.trim()) throw new Error('Por favor, informe a URL da Imagem.');
+  if (!data.affiliateUrl.trim()) throw new Error('Por favor, informe o Link de Afiliado.');
+
+  const defaultCategory = CATEGORIES_TREE[0];
+  const defaultSubcategory = defaultCategory?.subcategories?.[0];
+
+  const categoryId = data.categoryId || defaultCategory?.id || 'eletronicos';
+  const categoryName = data.categoryName || defaultCategory?.name || 'Eletrônicos';
+  const subcategoryId = data.subcategoryId || defaultSubcategory?.id;
+  const subcategoryName = data.subcategoryName || defaultSubcategory?.name;
+
+  const promotionalPrice = Number(data.price);
+  const originalPrice = data.originalPrice && data.originalPrice > promotionalPrice 
+    ? Number(data.originalPrice) 
+    : Math.round(promotionalPrice * 1.15);
+  const discountPercent = Math.max(5, Math.round(((originalPrice - promotionalPrice) / originalPrice) * 100));
+
+  const slug = data.title
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/--+/g, '-')
+    .trim();
+
+  const productId = `prod-${Date.now()}-${slug.slice(0, 30)}`;
+  const now = new Date().toISOString();
+  const storeId: StoreId = data.storeId || 'mercadolivre';
+  const storeName = data.storeName || 'Mercado Livre';
+
+  const primaryOffer: StoreOffer = {
+    id: `off-${storeId}-${Date.now()}`,
+    storeId,
+    storeName,
+    storeLogo: storeId === 'mercadolivre' 
+      ? 'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=100&auto=format&fit=crop&q=80'
+      : 'https://images.unsplash.com/photo-1523474253243-283a0ed81406?w=100&auto=format&fit=crop&q=80',
+    price: promotionalPrice,
+    originalPrice,
+    discountPercent,
+    currency: 'BRL',
+    affiliateUrl: data.affiliateUrl.trim(),
+    inStock: true,
+    freeShipping: data.freeShipping ?? true,
+    installment: '10x sem juros',
+    rating: 4.9,
+    reviewsCount: 150,
+    lastUpdated: 'Agora',
+  };
+
+  const newProduct: Product = {
+    id: productId,
+    title: data.title.trim(),
+    slug,
+    description: data.description || `${data.title.trim()} com preço verificado, garantia e envio rápido no Mercado Livre.`,
+    categoryId,
+    categoryName,
+    subcategoryId,
+    subcategoryName,
+    brand: data.brand?.trim() || 'Mercado Livre',
+    sku: `SKU-${Date.now()}`,
+    imageUrl: data.imageUrl.trim(),
+    searchKeywords: [
+      ...data.title.toLowerCase().split(/\s+/),
+      'mercado livre',
+      'promocao',
+      'oferta'
+    ].filter(Boolean),
+    minPrice: promotionalPrice,
+    maxPrice: originalPrice,
+    historicalLowestPrice: promotionalPrice,
+    bestStore: storeName,
+    bestStoreId: storeId,
+    rating: 4.9,
+    reviewsCount: 120,
+    isVerified: true,
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+    offers: [primaryOffer],
+    priceHistory: [
+      { date: 'Mar', timestamp: 1711929600000, minPrice: Math.round(promotionalPrice * 1.15) },
+      { date: 'Abr', timestamp: 1714521600000, minPrice: Math.round(promotionalPrice * 1.10) },
+      { date: 'Mai', timestamp: 1717200000000, minPrice: Math.round(promotionalPrice * 1.05) },
+      { date: 'Jun', timestamp: 1719792000000, minPrice: Math.round(promotionalPrice * 1.02) },
+      { date: 'Jul', timestamp: 1722470400000, minPrice: Math.round(promotionalPrice * 1.01) },
+      { date: 'Ago (Hoje)', timestamp: 1724889600000, minPrice: promotionalPrice },
+    ],
+  };
+
+  if (isSupabaseConfigured) {
+    try {
+      await supabase.from('products').insert({
+        id: newProduct.id,
+        title: newProduct.title,
+        slug: newProduct.slug,
+        description: newProduct.description,
+        category_id: newProduct.categoryId,
+        category_name: newProduct.categoryName,
+        subcategory_id: newProduct.subcategoryId,
+        subcategory_name: newProduct.subcategoryName,
+        brand: newProduct.brand,
+        sku: newProduct.sku,
+        image_url: newProduct.imageUrl,
+        search_keywords: newProduct.searchKeywords,
+        min_price: newProduct.minPrice,
+        max_price: newProduct.maxPrice,
+        historical_lowest_price: newProduct.historicalLowestPrice,
+        best_store: newProduct.bestStore,
+        best_store_id: newProduct.bestStoreId,
+        rating: newProduct.rating,
+        reviews_count: newProduct.reviewsCount,
+        is_verified: newProduct.isVerified,
+        is_active: newProduct.isActive,
+        offers: newProduct.offers,
+        price_history: newProduct.priceHistory,
+        created_at: newProduct.createdAt,
+        updated_at: newProduct.updatedAt,
+      });
+    } catch (err) {
+      console.warn('Supabase insert direct manual product exception:', err);
+    }
+  }
+
+  // Update local storage
+  const customProducts = getStoredCustomProducts();
+  saveStoredCustomProducts([newProduct, ...customProducts]);
 
   return newProduct;
 };

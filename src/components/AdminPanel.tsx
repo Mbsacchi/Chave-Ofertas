@@ -1,30 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  KeyLogo 
-} from './KeyLogo';
+import { KeyLogo } from './KeyLogo';
 import { 
   supabase, 
-  isSupabaseConfigured, 
   isAnonKeyMissing,
-  supabaseUrl,
   SUPABASE_SQL_SCHEMA 
 } from '../lib/supabase';
 import { 
-  searchMercadoLivreAPI, 
   fetchDraftProducts, 
   addDraftProduct, 
   updateDraftProduct, 
   deleteDraftProduct, 
   publishDraftToVitrine, 
-  MercadoLivreSearchResult,
+  createAndPublishManualProduct,
   fetchLiveDatabaseProducts
 } from '../services/adminService';
 import { DraftProduct, Product } from '../types';
 import { 
   ShieldCheck, 
   Lock, 
-  Search, 
-  Plus, 
   Trash2, 
   UploadCloud, 
   ExternalLink, 
@@ -38,7 +31,14 @@ import {
   Eye, 
   ArrowLeft,
   ShoppingBag,
-  Sparkles
+  Sparkles,
+  PlusCircle,
+  ImageIcon,
+  Tag,
+  DollarSign,
+  Link as LinkIcon,
+  Truck,
+  RotateCcw
 } from 'lucide-react';
 import { CATEGORIES_TREE } from '../data/mockData';
 
@@ -63,18 +63,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
-  const [authSuccess, setAuthSuccess] = useState<string | null>(null);
 
   // Active view tab in admin
-  const [activeTab, setActiveTab] = useState<'search' | 'staging' | 'published' | 'sql'>('search');
+  const [activeTab, setActiveTab] = useState<'create' | 'staging' | 'published' | 'sql'>('create');
 
-  // Search state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState<MercadoLivreSearchResult[]>([]);
-  const [searchError, setSearchError] = useState<string | null>(null);
+  // Manual Product Form state
+  const [manualTitle, setManualTitle] = useState('');
+  const [manualPrice, setManualPrice] = useState('');
+  const [manualOriginalPrice, setManualOriginalPrice] = useState('');
+  const [manualImageUrl, setManualImageUrl] = useState('');
+  const [manualAffiliateUrl, setManualAffiliateUrl] = useState('');
+  const [manualBrand, setManualBrand] = useState('Mercado Livre');
+  const [manualCategoryId, setManualCategoryId] = useState(CATEGORIES_TREE[0]?.id || 'eletronicos');
+  const [manualFreeShipping, setManualFreeShipping] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Staging Drafts state
+  // Staging Drafts & Published state
   const [drafts, setDrafts] = useState<DraftProduct[]>([]);
   const [draftsLoading, setDraftsLoading] = useState(false);
   const [publishedProducts, setPublishedProducts] = useState<Product[]>([]);
@@ -93,7 +97,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           setSessionUser(session?.user || null);
           setAuthLoading(false);
         }
-      } catch (err) {
+      } catch {
         if (mounted) setAuthLoading(false);
       }
     };
@@ -123,7 +127,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setDrafts(draftsData);
       setPublishedProducts(prodsData);
     } catch (err: any) {
-      console.warn('Erro ao carregar dados:', err);
+      console.error('Failed to load data:', err);
     } finally {
       setDraftsLoading(false);
     }
@@ -131,22 +135,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const showFeedback = (type: 'success' | 'error', message: string) => {
     setActionFeedback({ type, message });
-    setTimeout(() => setActionFeedback(null), 4500);
+    setTimeout(() => setActionFeedback(null), 4000);
   };
 
-  const handleAuth = async (e: React.FormEvent) => {
+  // Login handler with strict email whitelist
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
-    setAuthSuccess(null);
-
-    if (!email || !password) {
-      setAuthError('Informe e-mail e senha.');
-      return;
-    }
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Strict Hardcoded Administrator Email Validation
+    // Strict whitelist check
     if (!ALLOWED_ADMIN_EMAILS.includes(normalizedEmail)) {
       setAuthError('Acesso Negado: Este e-mail não possui privilégios de administrador.');
       return;
@@ -157,86 +156,161 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         email: normalizedEmail,
         password,
       });
-      if (error) throw error;
-      setSessionUser(data.user);
-      showFeedback('success', `Bem-vindo de volta, ${data.user?.email}!`);
-    } catch (err: any) {
-      // If Supabase credentials are placeholders, allow simulated developer session
-      if (!isSupabaseConfigured) {
-        const mockUser = { id: 'admin-dev-local', email: normalizedEmail };
-        setSessionUser(mockUser);
-        showFeedback('success', 'Acesso autorizado em Modo Administrador Seguro!');
-      } else {
-        setAuthError(err.message || 'Falha na autenticação. Verifique seu e-mail e senha.');
+
+      if (error) {
+        if (error.message.includes('Invalid login credentials')) {
+          setAuthError('Senha incorreta ou usuário não cadastrado no Supabase.');
+        } else {
+          setAuthError(error.message);
+        }
+        return;
       }
+
+      setSessionUser(data.user);
+      loadDraftsAndProducts();
+      showFeedback('success', 'Acesso administrativo autorizado!');
+    } catch (err: any) {
+      setAuthError(err.message || 'Erro ao autenticar.');
     }
   };
 
+  // Logout handler
   const handleLogout = async () => {
     try {
       await supabase.auth.signOut();
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('Logout error:', err);
     }
     setSessionUser(null);
     showFeedback('success', 'Sessão encerrada com sucesso.');
   };
 
-  // Search Mercado Livre API
-  const handleSearchML = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!searchQuery.trim()) return;
+  // Handle Manual Product Submission directly to Vitrine
+  const handleCreateProductToVitrine = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualTitle.trim()) {
+      showFeedback('error', 'Por favor, informe o Título do Produto.');
+      return;
+    }
+    const cleanPriceStr = manualPrice.toString().replace(/[^\d.,]/g, '').replace(',', '.');
+    const numericPrice = parseFloat(cleanPriceStr);
+    if (isNaN(numericPrice) || numericPrice <= 0) {
+      showFeedback('error', 'Por favor, informe um Preço válido.');
+      return;
+    }
+    if (!manualImageUrl.trim()) {
+      showFeedback('error', 'Por favor, insira a URL da imagem do produto.');
+      return;
+    }
+    if (!manualAffiliateUrl.trim()) {
+      showFeedback('error', 'Por favor, insira o Link de Afiliado encurtado.');
+      return;
+    }
 
-    setIsSearching(true);
-    setSearchError(null);
+    setIsSubmitting(true);
     try {
-      const items = await searchMercadoLivreAPI(searchQuery);
-      setSearchResults(items);
-      if (items.length === 0) {
-        setSearchError('Nenhum produto encontrado no Mercado Livre para este termo.');
+      let numericOriginalPrice: number | undefined = undefined;
+      if (manualOriginalPrice.trim()) {
+        const cleanOrig = manualOriginalPrice.replace(/[^\d.,]/g, '').replace(',', '.');
+        const parsed = parseFloat(cleanOrig);
+        if (!isNaN(parsed) && parsed > numericPrice) {
+          numericOriginalPrice = parsed;
+        }
       }
+
+      const selectedCategory = CATEGORIES_TREE.find(c => c.id === manualCategoryId) || CATEGORIES_TREE[0];
+      const defaultSubcategory = selectedCategory.subcategories[0];
+
+      const newProduct = await createAndPublishManualProduct({
+        title: manualTitle.trim(),
+        price: numericPrice,
+        originalPrice: numericOriginalPrice,
+        imageUrl: manualImageUrl.trim(),
+        affiliateUrl: manualAffiliateUrl.trim(),
+        brand: manualBrand.trim() || 'Mercado Livre',
+        categoryId: selectedCategory.id,
+        categoryName: selectedCategory.name,
+        subcategoryId: defaultSubcategory?.id,
+        subcategoryName: defaultSubcategory?.name,
+        storeName: 'Mercado Livre',
+        storeId: 'mercadolivre',
+        freeShipping: manualFreeShipping,
+      });
+
+      // Update state
+      setPublishedProducts(prev => [newProduct, ...prev]);
+      onProductPublished?.(newProduct);
+
+      // Limpar todos os campos do formulário
+      handleClearForm();
+
+      showFeedback('success', `Produto "${newProduct.title.slice(0, 30)}..." adicionado à Vitrine com sucesso!`);
+      loadDraftsAndProducts();
     } catch (err: any) {
-      setSearchError(err.message || 'Erro ao consultar a API do Mercado Livre.');
+      showFeedback('error', err.message || 'Erro ao adicionar produto.');
     } finally {
-      setIsSearching(false);
+      setIsSubmitting(false);
     }
   };
 
-  // Add Item to Staging Drafts
-  const handleAddSearchResultToDraft = async (item: MercadoLivreSearchResult) => {
+  // Handle Save as Draft (Staging Queue)
+  const handleSaveAsDraft = async () => {
+    if (!manualTitle.trim()) {
+      showFeedback('error', 'Por favor, informe pelo menos o Título do Produto.');
+      return;
+    }
+    const cleanPriceStr = manualPrice.toString().replace(/[^\d.,]/g, '').replace(',', '.');
+    const numericPrice = parseFloat(cleanPriceStr) || 0;
+
+    setIsSubmitting(true);
     try {
-      const defaultCategory = CATEGORIES_TREE[0];
-      const defaultSubcategory = defaultCategory.subcategories[0];
+      const selectedCategory = CATEGORIES_TREE.find(c => c.id === manualCategoryId) || CATEGORIES_TREE[0];
+      const defaultSubcategory = selectedCategory.subcategories[0];
+
+      let numericOriginalPrice = manualOriginalPrice ? parseFloat(manualOriginalPrice.replace(',', '.')) : Math.round(numericPrice * 1.15);
 
       const newDraft = await addDraftProduct({
-        externalId: item.id,
-        title: item.title,
-        brand: 'Mercado Livre Oficial',
-        description: `${item.title} com garantia oficial, entrega segura e melhores condições no Mercado Livre.`,
-        categoryId: defaultCategory.id,
-        categoryName: defaultCategory.name,
+        externalId: `manual-${Date.now()}`,
+        title: manualTitle.trim(),
+        brand: manualBrand.trim() || 'Mercado Livre',
+        description: `${manualTitle.trim()} com garantia oficial e melhores condições no Mercado Livre.`,
+        categoryId: selectedCategory.id,
+        categoryName: selectedCategory.name,
         subcategoryId: defaultSubcategory?.id,
         subcategoryName: defaultSubcategory?.name,
-        imageUrl: item.thumbnail || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=600&auto=format&fit=crop&q=80',
-        originalPrice: item.original_price || Math.round(item.price * 1.15),
-        promotionalPrice: item.price,
-        discountPercent: item.original_price ? Math.round(((item.original_price - item.price) / item.original_price) * 100) : 15,
-        affiliateUrl: '', // To be filled by admin
+        imageUrl: manualImageUrl.trim() || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=600&auto=format&fit=crop&q=80',
+        originalPrice: numericOriginalPrice,
+        promotionalPrice: numericPrice,
+        discountPercent: numericOriginalPrice && numericPrice ? Math.round(((numericOriginalPrice - numericPrice) / numericOriginalPrice) * 100) : 15,
+        affiliateUrl: manualAffiliateUrl.trim(),
         storeId: 'mercadolivre',
         storeName: 'Mercado Livre',
-        freeShipping: item.shipping.free_shipping,
+        freeShipping: manualFreeShipping,
         installment: '10x sem juros',
       });
 
       setDrafts(prev => [newDraft, ...prev]);
-      showFeedback('success', `"${item.title.slice(0, 35)}..." adicionado à Fila de Rascunhos!`);
+      handleClearForm();
+      showFeedback('success', `"${newDraft.title.slice(0, 30)}..." adicionado à Fila de Rascunhos!`);
       setActiveTab('staging');
     } catch (err: any) {
-      showFeedback('error', err.message || 'Erro ao adicionar rascunho.');
+      showFeedback('error', err.message || 'Erro ao salvar rascunho.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  // Update Draft Fields (e.g. Affiliate Link)
+  const handleClearForm = () => {
+    setManualTitle('');
+    setManualPrice('');
+    setManualOriginalPrice('');
+    setManualImageUrl('');
+    setManualAffiliateUrl('');
+    setManualBrand('Mercado Livre');
+    setManualFreeShipping(true);
+  };
+
+  // Update Draft Fields in Staging
   const handleUpdateDraftField = async (id: string, field: keyof DraftProduct, value: any) => {
     try {
       const updated = await updateDraftProduct(id, { [field]: value });
@@ -253,14 +327,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setDrafts(prev => prev.filter(d => d.id !== id));
       showFeedback('success', 'Rascunho removido da fila.');
     } catch (err: any) {
-      showFeedback('error', err.message || 'Erro ao excluir rascunho.');
+      showFeedback('error', err.message || 'Erro ao remover rascunho.');
     }
   };
 
-  // Publish Draft to Live Vitrine
+  // Publish Draft from Staging to Live Vitrine
   const handlePublishDraft = async (draft: DraftProduct) => {
     if (!draft.affiliateUrl || !draft.affiliateUrl.trim()) {
-      showFeedback('error', 'Atenção: Preencha o "Link de Afiliado" antes de publicar.');
+      showFeedback('error', 'Por favor, insira o link de afiliado antes de publicar.');
       return;
     }
 
@@ -268,10 +342,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       const published = await publishDraftToVitrine(draft);
       setDrafts(prev => prev.filter(d => d.id !== draft.id));
       setPublishedProducts(prev => [published, ...prev]);
-      if (onProductPublished) {
-        onProductPublished(published);
-      }
-      showFeedback('success', `🚀 Produto "${published.title.slice(0, 30)}..." publicado com sucesso na vitrine!`);
+      onProductPublished?.(published);
+      showFeedback('success', `"${published.title.slice(0, 30)}..." publicado com sucesso na Vitrine!`);
     } catch (err: any) {
       showFeedback('error', err.message || 'Erro ao publicar produto.');
     }
@@ -280,87 +352,50 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleCopySql = () => {
     navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
     setCopiedSql(true);
+    showFeedback('success', 'Script SQL copiado para a área de transferência!');
     setTimeout(() => setCopiedSql(false), 3000);
   };
 
-  // Loading Screen
+  // Loading indicator
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-300">
-        <div className="flex flex-col items-center gap-3">
-          <RefreshCw className="w-8 h-8 text-amber-400 animate-spin" />
-          <p className="text-sm font-medium">Verificando credenciais do Supabase...</p>
-        </div>
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-100 p-4">
+        <div className="w-10 h-10 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-sm font-bold text-slate-300">Carregando painel de administração...</p>
       </div>
     );
   }
 
-  // LOGIN SCREEN (When Not Authenticated)
+  // LOGIN SCREEN
   if (!sessionUser) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 font-sans">
-        <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
-          <div className="inline-block mb-4">
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          <div className="flex justify-center mb-8">
             <KeyLogo size="lg" />
           </div>
-          <h2 className="text-2xl font-black tracking-tight text-white flex items-center justify-center gap-2">
-            <ShieldCheck className="w-6 h-6 text-amber-400" />
-            <span>Painel Administrativo Blindado</span>
-          </h2>
-          <p className="mt-2 text-xs text-slate-400">
-            Acesso restrito para gestão da Fila de Rascunhos e publicação no banco de dados.
-          </p>
-        </div>
 
-        <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md space-y-6">
-          {/* Conditional Connection Warning Alert (Rendered ONLY if VITE_SUPABASE_ANON_KEY is missing or 'COLE_SUA_CHAVE_AQUI') */}
-          {isAnonKeyMissing && (
-            <div className="p-5 rounded-2xl bg-amber-950/80 border-2 border-amber-500/80 text-xs space-y-3 shadow-2xl animate-in fade-in duration-200">
-              <div className="flex items-center gap-2 text-amber-300 font-black text-sm">
-                <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 animate-bounce" />
-                <span>Aviso: Chave Pública do Supabase Pendente</span>
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl space-y-6">
+            <div className="text-center space-y-2">
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-amber-400/10 text-amber-400 border border-amber-400/20 mb-2">
+                <Lock className="w-6 h-6" />
               </div>
-              
-              <p className="text-amber-100/90 leading-relaxed">
-                A variável <code className="px-1.5 py-0.5 rounded bg-slate-950 text-amber-300 font-mono font-bold">VITE_SUPABASE_ANON_KEY</code> está vazia ou com o valor padrão <code className="px-1.5 py-0.5 rounded bg-slate-950 text-amber-300 font-mono font-bold">COLE_SUA_CHAVE_AQUI</code>.
+              <h2 className="text-2xl font-black text-white">Painel Administrativo</h2>
+              <p className="text-xs text-slate-400">
+                Acesso restrito para gerenciamento de ofertas e produtos afiliados.
               </p>
-
-              <div className="p-3.5 rounded-xl bg-slate-950/90 border border-amber-900/60 font-mono text-[11px] space-y-1.5 select-all">
-                <div className="text-slate-400"># Arquivo .env na raiz do projeto:</div>
-                <div className="text-emerald-400 font-bold">VITE_SUPABASE_URL={supabaseUrl || 'https://axrqvtgaiikhgfihfrwz.supabase.co'}</div>
-                <div className="text-amber-400 font-bold">VITE_SUPABASE_ANON_KEY=eyJhbGciOi... (Cole sua anon key aqui)</div>
-              </div>
-
-              <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px] text-slate-300 space-y-1">
-                <p className="font-bold text-white flex items-center gap-1">
-                  <span>Onde encontrar a chave?</span>
-                </p>
-                <p className="text-slate-400">
-                  Acesse seu painel no <strong>Supabase</strong> &gt; <strong>Project Settings</strong> &gt; <strong>API</strong> &gt; <strong>Project API keys</strong> e copie a chave <strong>anon / public</strong> para o arquivo <code className="text-amber-300">.env</code>.
-                </p>
-              </div>
             </div>
-          )}
 
-          {/* Login / SignUp Form */}
-          <div className="bg-slate-900/80 backdrop-blur-md py-8 px-6 shadow-2xl rounded-3xl border border-slate-800 sm:px-10">
-            <form className="space-y-4" onSubmit={handleAuth}>
-              {authError && (
-                <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-800 text-xs text-rose-300 flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>{authError}</span>
-                </div>
-              )}
+            {authError && (
+              <div className="p-4 rounded-2xl bg-rose-950/60 border border-rose-800 text-xs text-rose-300 flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <span className="leading-relaxed">{authError}</span>
+              </div>
+            )}
 
-              {authSuccess && (
-                <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-800 text-xs text-emerald-300 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>{authSuccess}</span>
-                </div>
-              )}
-
+            <form onSubmit={handleLogin} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
                   E-mail de Administrador
                 </label>
                 <input
@@ -368,14 +403,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@chaveofertas.com.br"
+                  placeholder="murilobozolans@gmail.com"
                   className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Senha
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  Senha de Acesso
                 </label>
                 <input
                   type="password"
@@ -412,6 +447,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     );
   }
 
+  // Parsed prices for live preview
+  const parsedPrice = parseFloat(manualPrice.replace(',', '.')) || 0;
+  const parsedOriginalPrice = manualOriginalPrice ? parseFloat(manualOriginalPrice.replace(',', '.')) : 0;
+  const previewDiscount = parsedOriginalPrice > parsedPrice && parsedPrice > 0
+    ? Math.round(((parsedOriginalPrice - parsedPrice) / parsedOriginalPrice) * 100)
+    : (parsedPrice > 0 ? 15 : 0);
+
   // AUTHENTICATED ADMIN DASHBOARD
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-20">
@@ -424,7 +466,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <div className="h-5 w-px bg-slate-800 hidden sm:block" />
           <div className="hidden sm:flex items-center gap-2">
             <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              Painel Staging & Database
+              Painel de Ofertas & Afiliados
             </span>
           </div>
         </div>
@@ -498,15 +540,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         {/* Navigation Tabs */}
         <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-900 border border-slate-800 overflow-x-auto no-scrollbar">
           <button
-            onClick={() => setActiveTab('search')}
+            onClick={() => setActiveTab('create')}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-              activeTab === 'search'
+              activeTab === 'create'
                 ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-400/20'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
             }`}
           >
-            <Search className="w-4 h-4" />
-            <span>Buscador Mercado Livre API</span>
+            <PlusCircle className="w-4 h-4" />
+            <span>Cadastrar Produto Manualmente</span>
           </button>
 
           <button
@@ -521,7 +563,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             }`}
           >
             <Layers className="w-4 h-4" />
-            <span>Fila de Rascunhos (Staging)</span>
+            <span>Fila de Rascunhos</span>
             <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-950 text-amber-400">
               {drafts.length}
             </span>
@@ -558,123 +600,264 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </button>
         </div>
 
-        {/* TAB 1: MERCADO LIVRE API SEARCH */}
-        {activeTab === 'search' && (
-          <div className="space-y-6 animate-in fade-in duration-150">
-            {/* Search Bar */}
-            <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
+        {/* TAB 1: MANUAL PRODUCT REGISTRATION FORM */}
+        {activeTab === 'create' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-150">
+            {/* Form Section */}
+            <div className="lg:col-span-8 p-6 sm:p-8 rounded-3xl bg-slate-900 border border-slate-800 space-y-6 shadow-xl">
               <div>
-                <h3 className="text-lg font-black text-white flex items-center gap-2">
-                  <Search className="w-5 h-5 text-amber-400" />
-                  <span>Buscar Produtos na API Pública do Mercado Livre (MLB)</span>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/20 uppercase tracking-wider">
+                    Cadastro Direto
+                  </span>
+                </div>
+                <h3 className="text-xl font-black text-white flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-amber-400" />
+                  <span>Cadastrar Oferta do Mercado Livre</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
-                  Digite o nome do produto para extrair títulos, imagens em alta resolução e preços diretamente do catálogo oficial.
+                  Copie o título, preço, link da foto e seu link encurtado gerado no painel de Afiliados do Mercado Livre para publicar na vitrine.
                 </p>
               </div>
 
-              <form onSubmit={handleSearchML} className="flex gap-2">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-500" />
+              <form onSubmit={handleCreateProductToVitrine} className="space-y-5">
+                {/* 1. Product Title */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Título do Produto *</span>
+                  </label>
                   <input
                     type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Ex: PlayStation 5 Slim, iPhone 17, Notebook Lenovo, Sanduicheira..."
-                    className="w-full pl-10 pr-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors"
+                    required
+                    value={manualTitle}
+                    onChange={(e) => setManualTitle(e.target.value)}
+                    placeholder="Ex: PlayStation 5 Slim Edição Digital 1TB + 2 Jogos"
+                    className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
                   />
                 </div>
-                <button
-                  type="submit"
-                  disabled={isSearching}
-                  className="px-6 py-3 rounded-2xl font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 transition-all flex items-center gap-2 text-xs shrink-0 shadow-lg shadow-amber-400/20"
-                >
-                  {isSearching ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                  <span>{isSearching ? 'Buscando...' : 'Buscar no Mercado Livre'}</span>
-                </button>
+
+                {/* 2. Price & Original Price */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5" />
+                      <span>Preço Promocional / Atual (R$) *</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={manualPrice}
+                      onChange={(e) => setManualPrice(e.target.value)}
+                      placeholder="Ex: 3499.90"
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/40 text-sm font-black text-amber-400 placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 mb-1.5 flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Preço Original / "De" (R$) <span className="text-[10px] font-normal text-slate-500">(Opcional)</span></span>
+                    </label>
+                    <input
+                      type="text"
+                      value={manualOriginalPrice}
+                      onChange={(e) => setManualOriginalPrice(e.target.value)}
+                      placeholder="Ex: 3999.00"
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors"
+                    />
+                  </div>
+                </div>
+
+                {/* 3. Image URL */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                    <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+                    <span>URL da Imagem do Produto *</span>
+                  </label>
+                  <input
+                    type="url"
+                    required
+                    value={manualImageUrl}
+                    onChange={(e) => setManualImageUrl(e.target.value)}
+                    placeholder="Cole a URL da foto (ex: https://http2.mlstatic.com/D_NQ_NP_...-O.webp)"
+                    className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Dica: No Mercado Livre, clique com o botão direito na foto do produto e escolha "Copiar endereço da imagem".
+                  </p>
+                </div>
+
+                {/* 4. Affiliate Link */}
+                <div>
+                  <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <LinkIcon className="w-3.5 h-3.5" />
+                      <span>Link de Afiliado (URL Encurtada) *</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-normal">
+                      Ex: https://mercadolivre.com/sec/xxxxxx
+                    </span>
+                  </label>
+                  <input
+                    type="url"
+                    required
+                    value={manualAffiliateUrl}
+                    onChange={(e) => setManualAffiliateUrl(e.target.value)}
+                    placeholder="Cole o link encurtado com seu ID de comissão..."
+                    className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/50 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors shadow-inner font-mono text-xs"
+                  />
+                </div>
+
+                {/* Options: Category & Free Shipping */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                      Categoria da Vitrine
+                    </label>
+                    <select
+                      value={manualCategoryId}
+                      onChange={(e) => setManualCategoryId(e.target.value)}
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 transition-colors"
+                    >
+                      {CATEGORIES_TREE.map(cat => (
+                        <option key={cat.id} value={cat.id}>{cat.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                      Opções de Entrega
+                    </label>
+                    <label className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={manualFreeShipping}
+                        onChange={(e) => setManualFreeShipping(e.target.checked)}
+                        className="w-4 h-4 accent-amber-400 rounded"
+                      />
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
+                        <Truck className="w-4 h-4 text-emerald-400" />
+                        <span>Destacar como Frete Grátis</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Form Action Buttons */}
+                <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center gap-3">
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="flex-1 py-3.5 px-6 rounded-2xl font-black text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-sm shadow-xl shadow-amber-400/20"
+                  >
+                    {isSubmitting ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-4 h-4" />
+                    )}
+                    <span>{isSubmitting ? 'Publicando...' : 'Adicionar à Vitrine'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveAsDraft}
+                    disabled={isSubmitting}
+                    className="py-3.5 px-5 rounded-2xl font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 active:scale-98 disabled:opacity-50 transition-all flex items-center gap-2 text-xs"
+                    title="Salvar na fila de rascunhos para revisar depois"
+                  >
+                    <Layers className="w-4 h-4 text-amber-400" />
+                    <span>Salvar como Rascunho</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleClearForm}
+                    className="p-3.5 rounded-2xl bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-white transition-colors border border-slate-800"
+                    title="Limpar todos os campos"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                </div>
               </form>
             </div>
 
-            {searchError && (
-              <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-800 text-xs text-rose-300 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>{searchError}</span>
-              </div>
-            )}
-
-            {/* Results Grid */}
-            {searchResults.length > 0 && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-bold text-white">
-                    Resultados Encontrados ({searchResults.length})
-                  </h4>
-                  <span className="text-xs text-slate-400">
-                    Clique em "+ Adicionar ao Staging" para montar sua oferta.
+            {/* Live Preview Section */}
+            <div className="lg:col-span-4 space-y-4">
+              <div className="p-4 rounded-3xl bg-slate-900 border border-slate-800">
+                <div className="flex items-center justify-between mb-3 px-1">
+                  <span className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
+                    <Eye className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Prévia ao Vivo na Vitrine</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-800">
+                    Mercado Livre
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {searchResults.map((item) => (
-                    <div
-                      key={item.id}
-                      className="p-4 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition-all flex flex-col justify-between group"
-                    >
-                      <div className="space-y-3">
-                        <div className="relative aspect-square rounded-xl bg-slate-950 overflow-hidden flex items-center justify-center p-2">
-                          <img
-                            src={item.thumbnail}
-                            alt={item.title}
-                            className="max-h-full max-w-full object-contain group-hover:scale-105 transition-transform"
-                            loading="lazy"
-                          />
-                          {item.shipping.free_shipping && (
-                            <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/80 text-emerald-400 text-[10px] font-bold border border-emerald-800">
-                              Frete Grátis
-                            </span>
-                          )}
-                        </div>
-
-                        <div>
-                          <p className="text-xs font-bold text-white line-clamp-2" title={item.title}>
-                            {item.title}
-                          </p>
-                          <div className="mt-2 flex items-baseline gap-2">
-                            <span className="text-base font-black text-amber-400">
-                              R$ {item.price.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                            </span>
-                            {item.original_price && item.original_price > item.price && (
-                              <span className="text-xs text-slate-500 line-through">
-                                R$ {item.original_price.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                              </span>
-                            )}
-                          </div>
-                        </div>
+                {/* Simulated Vitrine Card */}
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 shadow-2xl">
+                  <div className="relative aspect-square rounded-xl bg-slate-900 overflow-hidden flex items-center justify-center p-2 border border-slate-800/80">
+                    {manualImageUrl ? (
+                      <img
+                        src={manualImageUrl}
+                        alt="Preview"
+                        className="max-h-full max-w-full object-contain"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <div className="text-center p-4 space-y-2 text-slate-600">
+                        <ImageIcon className="w-10 h-10 mx-auto stroke-1" />
+                        <p className="text-[11px]">Cole a URL da imagem para visualizar a foto aqui</p>
                       </div>
+                    )}
 
-                      <div className="pt-3 border-t border-slate-800/80 mt-3 flex items-center gap-2">
-                        <button
-                          onClick={() => handleAddSearchResultToDraft(item)}
-                          className="flex-1 py-2 px-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 active:scale-98 transition-all shadow-md shadow-amber-400/10"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>Adicionar aos Rascunhos</span>
-                        </button>
-                        <a
-                          href={item.permalink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                          title="Abrir no Mercado Livre"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </a>
-                      </div>
+                    {manualFreeShipping && (
+                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/90 text-emerald-400 text-[10px] font-bold border border-emerald-800 flex items-center gap-1">
+                        <Truck className="w-3 h-3" />
+                        <span>Frete Grátis</span>
+                      </span>
+                    )}
+
+                    {previewDiscount > 0 && (
+                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black shadow-md">
+                        -{previewDiscount}%
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
+                      Mercado Livre Oficial
+                    </span>
+                    <h4 className="text-xs font-bold text-white line-clamp-2 leading-snug">
+                      {manualTitle || 'Título do Produto aparecerá aqui...'}
+                    </h4>
+
+                    <div className="pt-2 flex items-baseline gap-2">
+                      <span className="text-lg font-black text-amber-400">
+                        R$ {parsedPrice > 0 ? parsedPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}
+                      </span>
+                      {parsedOriginalPrice > parsedPrice && (
+                        <span className="text-xs text-slate-500 line-through">
+                          R$ {parsedOriginalPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </span>
+                      )}
                     </div>
-                  ))}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800">
+                    <div className="w-full py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-md">
+                      <span>Ver no Mercado Livre</span>
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </div>
+                  </div>
                 </div>
               </div>
-            )}
+            </div>
           </div>
         )}
 
@@ -685,10 +868,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <div>
                 <h3 className="text-lg font-black text-white flex items-center gap-2">
                   <Layers className="w-5 h-5 text-amber-400" />
-                  <span>Fila de Rascunhos Blindada (Staging)</span>
+                  <span>Fila de Rascunhos (Staging)</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
-                  Insira o seu link de afiliado, ajuste os preços e clique em "Publicar na Vitrine".
+                  Itens salvos como rascunho para ajuste de preços, categoria e publicação posterior na vitrine.
                 </p>
               </div>
 
@@ -709,14 +892,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <Layers className="w-10 h-10 text-slate-600 mx-auto" />
                 <h4 className="text-base font-bold text-white">Nenhum rascunho pendente</h4>
                 <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                  Use o Buscador do Mercado Livre para adicionar novos produtos à sua fila de rascunhos.
+                  Você pode cadastrar produtos diretamente para a vitrine ou salvá-los como rascunho na aba Cadastrar Produto.
                 </p>
                 <button
-                  onClick={() => setActiveTab('search')}
+                  onClick={() => setActiveTab('create')}
                   className="px-5 py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs inline-flex items-center gap-2 shadow-lg shadow-amber-400/20 mt-2"
                 >
-                  <Search className="w-3.5 h-3.5" />
-                  <span>Buscar Produtos Agora</span>
+                  <PlusCircle className="w-3.5 h-3.5" />
+                  <span>Cadastrar Novo Produto</span>
                 </button>
               </div>
             ) : (
@@ -773,7 +956,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           </div>
                         </div>
 
-                        {/* Pricing & Installment Row */}
+                        {/* Pricing Row */}
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                           <div>
                             <label className="block text-[11px] font-bold text-slate-400 mb-1">
@@ -821,11 +1004,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           </div>
                         </div>
 
-                        {/* Affiliate URL Mandatory Input */}
+                        {/* Affiliate URL */}
                         <div>
                           <label className="block text-[11px] font-bold text-amber-400 mb-1 flex items-center justify-between">
                             <span>Link de Afiliado Oficial (Destino do Botão de Compra) *</span>
-                            <span className="text-[10px] text-slate-500 font-normal">Ex: https://meli.la/xxxxxx</span>
+                            <span className="text-[10px] text-slate-500 font-normal">Ex: https://mercadolivre.com/sec/xxxxxx</span>
                           </label>
                           <div className="flex gap-2">
                             <input
@@ -888,7 +1071,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <span>Produtos Ativos na Vitrine</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
-                  Itens publicados via painel administrativo ou integrados via Supabase.
+                  Itens publicados via painel administrativo ou sincronizados com o Supabase.
                 </p>
               </div>
 
