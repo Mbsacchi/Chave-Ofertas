@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { KeyLogo } from './KeyLogo';
 import { 
   supabase, 
@@ -13,6 +13,7 @@ import {
   publishDraftToVitrine, 
   deletePublishedProduct,
   updatePublishedProduct,
+  removeStoreOfferFromProduct,
   addOfferToExistingProduct,
   fetchAllGlobalProducts
 } from '../services/adminService';
@@ -47,7 +48,9 @@ import {
   Store as StoreIcon, 
   Plus, 
   X, 
-  CheckCheck 
+  CheckCheck, 
+  Filter, 
+  ArrowUpDown 
 } from 'lucide-react';
 import { CATEGORIES_TREE } from '../data/mockData';
 
@@ -108,6 +111,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [manualCategoryId, setManualCategoryId] = useState(CATEGORIES_TREE[0]?.id || 'eletronicos');
   const [manualFreeShipping, setManualFreeShipping] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Table Filters & Sorting state (Vitrine Publicada)
+  const [tableCategoryFilter, setTableCategoryFilter] = useState('all');
+  const [tableStoreFilter, setTableStoreFilter] = useState('all');
+  const [tableSortBy, setTableSortBy] = useState<'name-asc' | 'name-desc' | 'price-asc' | 'price-desc'>('name-asc');
 
   // Action status feedbacks
   const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -241,7 +249,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const currentParsedPrice = parseNum(manualPrice);
   const calculatedDiscount = calcDiscountPercent(currentParsedOriginalPrice, currentParsedPrice);
 
-  // Real-time search and filter existing products
+  // Active product being edited or linked
+  const activeProduct = editingProductId 
+    ? publishedProducts.find(p => p.id === editingProductId) 
+    : selectedExistingProduct;
+
+  // Check if the currently selected store already has an offer in this product
+  const currentStoreOffer = useMemo(() => {
+    if (!activeProduct || !activeProduct.offers) return null;
+    return activeProduct.offers.find(
+      (o) => o.storeName.toLowerCase() === manualStoreName.trim().toLowerCase()
+    ) || null;
+  }, [activeProduct, manualStoreName]);
+
+  const currentStoreHasOffer = Boolean(currentStoreOffer);
+
+  // 1. ISOLAMENTO DE OFERTAS: Troca de loja no formulário
+  const handleStoreSelect = (newStoreName: string) => {
+    setManualStoreName(newStoreName);
+
+    if (activeProduct && activeProduct.offers) {
+      const match = activeProduct.offers.find(
+        (o) => o.storeName.toLowerCase() === newStoreName.trim().toLowerCase()
+      );
+
+      if (match) {
+        // Se a loja já existe no produto, preenche os campos com os dados dela
+        setManualOriginalPrice(match.originalPrice ? match.originalPrice.toString() : '');
+        setManualPrice(match.price ? match.price.toString() : '');
+        setManualAffiliateUrl(match.affiliateUrl || '');
+        setManualFreeShipping(match.freeShipping ?? true);
+        showFeedback('success', `Carregando oferta existente da loja "${newStoreName}".`);
+      } else {
+        // Se não existe, limpa os campos para adicionar nova loja ao produto
+        setManualOriginalPrice('');
+        setManualPrice('');
+        setManualAffiliateUrl('');
+        setManualFreeShipping(true);
+        showFeedback('success', `Loja "${newStoreName}" ainda não cadastrada. Preencha os campos para adicioná-la.`);
+      }
+    }
+  };
+
+  // Real-time search and filter existing products across the full global catalog
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setSearchQuery(value);
@@ -257,7 +307,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       (p) =>
         p.title.toLowerCase().includes(term) ||
         p.brand?.toLowerCase().includes(term) ||
-        p.categoryName?.toLowerCase().includes(term)
+        p.categoryName?.toLowerCase().includes(term) ||
+        p.offers?.some(o => o.storeName.toLowerCase().includes(term))
     );
 
     setSuggestions(matches);
@@ -275,17 +326,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setSuggestions([]); // Fecha o dropdown
     setEditingProductId(null);
 
-    // Default to a different popular store for multi-store comparison
+    // Find next store not yet added or default to primary
     const existingStores = prod.offers?.map(o => o.storeName.toLowerCase()) || [];
     const nextStore = POPULAR_STORES.find(s => !existingStores.includes(s.name.toLowerCase()))?.name || 'Amazon';
-    setManualStoreName(nextStore);
-
-    setManualOriginalPrice('');
-    setManualPrice('');
-    setManualAffiliateUrl('');
-    setManualFreeShipping(true);
-
-    showFeedback('success', `Produto "${prod.title.slice(0, 30)}..." selecionado. Preencha os dados da nova loja.`);
+    
+    handleStoreSelect(nextStore);
+    showFeedback('success', `Produto "${prod.title.slice(0, 30)}..." selecionado.`);
   };
 
   // Clear Form inputs
@@ -328,7 +374,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
     setIsSubmitting(true);
     try {
-      // CENÁRIO A: Adicionar nova loja/oferta a um produto existente no Comparador
+      // CENÁRIO A: Adicionar ou Atualizar oferta em produto existente via Comparador
       if (selectedExistingProduct) {
         const updated = await addOfferToExistingProduct({
           productId: selectedExistingProduct.id,
@@ -342,10 +388,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         setPublishedProducts(prev => prev.map(p => (p.id === updated.id ? updated : p)));
         onProductPublished?.(updated);
         handleClearForm();
-        showFeedback('success', `Nova oferta da loja "${manualStoreName}" adicionada com sucesso ao comparador!`);
+        showFeedback('success', `Oferta da loja "${manualStoreName}" salva com sucesso no comparador!`);
         setActiveTab('published');
       } 
-      // CENÁRIO B: Editando um produto publicado existente
+      // CENÁRIO B: Editando um produto publicado existente (Isolando a oferta da loja selecionada)
       else if (editingProductId) {
         const selectedCategory = CATEGORIES_TREE.find(c => c.id === manualCategoryId) || CATEGORIES_TREE[0];
         const defaultSubcategory = selectedCategory.subcategories[0];
@@ -367,7 +413,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         setPublishedProducts(prev => prev.map(p => (p.id === editingProductId ? updated : p)));
         onProductPublished?.(updated);
         handleClearForm();
-        showFeedback('success', `Produto "${updated.title.slice(0, 30)}..." atualizado com sucesso na Vitrine!`);
+        showFeedback('success', `Oferta da loja "${manualStoreName}" no produto "${updated.title.slice(0, 25)}..." salva na Vitrine!`);
         setActiveTab('published');
       } 
       // CENÁRIO C: Cadastrar NOVO produto (Fluxo de Rascunho Obrigatório)
@@ -427,6 +473,41 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  // 2. EXCLUSÃO INDIVIDUAL DE LOJAS
+  const handleRemoveCurrentStoreOffer = async () => {
+    if (!activeProduct) return;
+
+    if (!window.confirm(`Tem certeza que deseja remover APENAS a oferta da loja "${manualStoreName}" deste produto? As outras lojas permanecerão intactas.`)) {
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      const updated = await removeStoreOfferFromProduct(activeProduct.id, manualStoreName.trim());
+      setPublishedProducts(prev => prev.map(p => (p.id === updated.id ? updated : p)));
+      onProductPublished?.(updated);
+
+      // Alterna para a primeira loja restante do produto
+      const firstRemainingOffer = updated.offers[0];
+      if (firstRemainingOffer) {
+        setManualStoreName(firstRemainingOffer.storeName);
+        setManualOriginalPrice(firstRemainingOffer.originalPrice ? firstRemainingOffer.originalPrice.toString() : '');
+        setManualPrice(firstRemainingOffer.price ? firstRemainingOffer.price.toString() : '');
+        setManualAffiliateUrl(firstRemainingOffer.affiliateUrl || '');
+        setManualFreeShipping(firstRemainingOffer.freeShipping ?? true);
+      } else {
+        handleClearForm();
+      }
+
+      showFeedback('success', `Oferta da loja "${manualStoreName}" removida com sucesso!`);
+      loadDraftsAndProducts();
+    } catch (err: any) {
+      showFeedback('error', err.message || 'Erro ao remover loja.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // Start Editing Published Product
   const handleEditPublishedProduct = (product: Product) => {
     const primaryOffer = product.offers[0];
@@ -436,8 +517,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setEditingProductId(product.id);
     setManualTitle(product.title);
     setManualStoreName(primaryOffer?.storeName || product.bestStore || 'Mercado Livre');
-    setManualOriginalPrice(product.maxPrice ? product.maxPrice.toString() : '');
-    setManualPrice(product.minPrice ? product.minPrice.toString() : '');
+    setManualOriginalPrice(primaryOffer?.originalPrice ? primaryOffer.originalPrice.toString() : (product.maxPrice ? product.maxPrice.toString() : ''));
+    setManualPrice(primaryOffer?.price ? primaryOffer.price.toString() : (product.minPrice ? product.minPrice.toString() : ''));
     setManualImageUrl(product.imageUrl);
     setManualAffiliateUrl(primaryOffer?.affiliateUrl || '');
     setManualCategoryId(product.categoryId);
@@ -453,18 +534,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setSearchQuery(product.title);
     setSuggestions([]);
     setEditingProductId(null);
-    setManualStoreName('Amazon');
+
+    const existingStores = product.offers?.map(o => o.storeName.toLowerCase()) || [];
+    const nextStore = POPULAR_STORES.find(s => !existingStores.includes(s.name.toLowerCase()))?.name || 'Amazon';
+    
+    setManualStoreName(nextStore);
     setManualOriginalPrice('');
     setManualPrice('');
     setManualAffiliateUrl('');
     setManualFreeShipping(true);
     setActiveTab('create');
-    showFeedback('success', `Pronto para adicionar uma nova loja ao produto "${product.title.slice(0, 25)}...".`);
+    showFeedback('success', `Pronto para adicionar oferta da loja "${nextStore}" ao produto "${product.title.slice(0, 25)}...".`);
   };
 
-  // Delete Published Product
+  // Delete Published Product Entirely
   const handleDeletePublishedProduct = async (productId: string) => {
-    if (!window.confirm('Tem certeza que deseja remover este produto da Vitrine Publicada?')) {
+    if (!window.confirm('Tem certeza que deseja remover este produto completo da Vitrine Publicada?')) {
       return;
     }
 
@@ -523,6 +608,65 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     showFeedback('success', 'Script SQL copiado para a área de transferência!');
     setTimeout(() => setCopiedSql(false), 3000);
   };
+
+  // 3. FILTROS E ORDENAÇÃO NA TABELA (Vitrine Publicada)
+  const uniqueCategories = useMemo(() => {
+    return Array.from(
+      new Set(publishedProducts.map((p) => p.categoryName || 'Geral'))
+    ).filter(Boolean).sort();
+  }, [publishedProducts]);
+
+  const uniqueStores = useMemo(() => {
+    const storesSet = new Set<string>();
+    publishedProducts.forEach((p) => {
+      if (p.offers && p.offers.length > 0) {
+        p.offers.forEach((o) => storesSet.add(o.storeName));
+      } else if (p.bestStore) {
+        storesSet.add(p.bestStore);
+      }
+    });
+    return Array.from(storesSet).filter(Boolean).sort();
+  }, [publishedProducts]);
+
+  const displayedPublishedProducts = useMemo(() => {
+    return publishedProducts
+      .filter((p) => {
+        // 1. Filtrar por Categoria
+        if (tableCategoryFilter !== 'all' && (p.categoryName || 'Geral') !== tableCategoryFilter) {
+          return false;
+        }
+        // 2. Filtrar por Loja
+        if (tableStoreFilter !== 'all') {
+          const hasStore = p.offers?.some(
+            (o) => o.storeName.toLowerCase() === tableStoreFilter.toLowerCase()
+          ) || p.bestStore?.toLowerCase() === tableStoreFilter.toLowerCase();
+          if (!hasStore) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        // Obter menor preço da lista de ofertas
+        const minPriceA = a.offers && a.offers.length > 0
+          ? Math.min(...a.offers.map((o) => o.price))
+          : a.minPrice;
+        const minPriceB = b.offers && b.offers.length > 0
+          ? Math.min(...b.offers.map((o) => o.price))
+          : b.minPrice;
+
+        switch (tableSortBy) {
+          case 'name-asc':
+            return a.title.localeCompare(b.title, 'pt-BR');
+          case 'name-desc':
+            return b.title.localeCompare(a.title, 'pt-BR');
+          case 'price-asc':
+            return minPriceA - minPriceB;
+          case 'price-desc':
+            return minPriceB - minPriceA;
+          default:
+            return 0;
+        }
+      });
+  }, [publishedProducts, tableCategoryFilter, tableStoreFilter, tableSortBy]);
 
   // Loading indicator
   if (authLoading) {
@@ -616,8 +760,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   }
 
   // Active Preview Item
-  const previewImageUrl = selectedExistingProduct ? selectedExistingProduct.imageUrl : manualImageUrl;
-  const previewTitle = selectedExistingProduct ? selectedExistingProduct.title : manualTitle;
+  const previewImageUrl = activeProduct ? activeProduct.imageUrl : manualImageUrl;
+  const previewTitle = activeProduct ? activeProduct.title : manualTitle;
 
   // AUTHENTICATED ADMIN DASHBOARD
   return (
@@ -777,7 +921,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </button>
         </div>
 
-        {/* TAB 1: COMPARATOR FORM WITH AUTOCOMPLETE (SEARCHQUERY & SUGGESTIONS) */}
+        {/* TAB 1: COMPARATOR FORM WITH AUTOCOMPLETE & ISOLATED STORE OFFERS */}
         {activeTab === 'create' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-150">
             {/* Form Section */}
@@ -790,7 +934,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <Search className="w-3.5 h-3.5 text-amber-400" />
                     <span>Buscar produto existente na Vitrine</span>
                   </label>
-                  {(searchQuery || selectedExistingProduct) && (
+                  {(searchQuery || selectedExistingProduct || editingProductId) && (
                     <button
                       type="button"
                       onClick={handleClearForm}
@@ -871,27 +1015,45 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 )}
               </div>
 
-              {/* Selected Existing Product Banner */}
-              {selectedExistingProduct && (
+              {/* Selected Existing / Editing Product Banner */}
+              {activeProduct && (
                 <div className="p-4 rounded-2xl bg-emerald-950/50 border border-emerald-800/80 flex items-center justify-between gap-3 animate-in slide-in-from-top-2 duration-150 shadow-lg">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-12 h-12 rounded-xl bg-white p-1.5 flex items-center justify-center shrink-0 shadow-sm border border-emerald-700">
                       <img
-                        src={selectedExistingProduct.imageUrl}
-                        alt={selectedExistingProduct.title}
+                        src={activeProduct.imageUrl}
+                        alt={activeProduct.title}
                         className="max-h-full max-w-full object-contain"
                       />
                     </div>
                     <div className="min-w-0">
                       <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-emerald-500 text-slate-950 uppercase tracking-wider">
-                        Produto Vinculado
+                        {editingProductId ? 'Editando Ofertas do Produto' : 'Produto Vinculado'}
                       </span>
                       <h4 className="text-xs font-bold text-white truncate mt-1">
-                        {selectedExistingProduct.title}
+                        {activeProduct.title}
                       </h4>
-                      <p className="text-[11px] text-emerald-300">
-                        Preencha apenas os dados da nova loja abaixo para expandir o comparador de preços deste produto.
-                      </p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[11px] text-emerald-300">
+                          {activeProduct.offers?.length || 1} loja(s) cadastrada(s):
+                        </span>
+                        <div className="flex flex-wrap gap-1">
+                          {activeProduct.offers?.map((o) => (
+                            <button
+                              key={o.id}
+                              type="button"
+                              onClick={() => handleStoreSelect(o.storeName)}
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                                manualStoreName.toLowerCase() === o.storeName.toLowerCase()
+                                  ? 'bg-amber-400 text-slate-950 border-amber-400'
+                                  : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-slate-500'
+                              }`}
+                            >
+                              {o.storeName.split(' ')[0]}: R$ {o.price.toFixed(0)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -910,24 +1072,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-lg font-black text-white flex items-center gap-2">
-                    {selectedExistingProduct ? (
+                    {activeProduct ? (
                       <StoreIcon className="w-5 h-5 text-emerald-400" />
-                    ) : editingProductId ? (
-                      <Pencil className="w-5 h-5 text-sky-400" />
                     ) : (
                       <Sparkles className="w-5 h-5 text-amber-400" />
                     )}
                     <span>
-                      {selectedExistingProduct 
-                        ? 'Campos da Nova Oferta / Loja' 
-                        : editingProductId 
-                          ? 'Editar Produto Publicado' 
-                          : 'Campos do Novo Produto & Oferta'}
+                      {activeProduct 
+                        ? `Oferta da Loja: ${manualStoreName}` 
+                        : 'Dados do Novo Produto & Primeira Oferta'}
                     </span>
                   </h3>
+                  {activeProduct && (
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      {currentStoreHasOffer 
+                        ? `A loja "${manualStoreName}" já possui uma oferta cadastrada. Altere os valores abaixo para atualizá-la ou remova-a.`
+                        : `A loja "${manualStoreName}" ainda não possui oferta. Preencha os campos para inseri-la.`}
+                    </p>
+                  )}
                 </div>
 
-                {(manualTitle || manualPrice || manualOriginalPrice || manualImageUrl || manualAffiliateUrl || selectedExistingProduct || editingProductId) && (
+                {(manualTitle || manualPrice || manualOriginalPrice || manualImageUrl || manualAffiliateUrl || activeProduct) && (
                   <button
                     type="button"
                     onClick={handleClearForm}
@@ -940,8 +1105,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
 
               <form onSubmit={handleSubmitForm} className="space-y-5">
-                {/* Título & Imagem (Ocultos se o produto já existir e estiver selecionado) */}
-                {!selectedExistingProduct && (
+                {/* Título & Imagem (Ocultos se o produto já existir / estiver sendo editado) */}
+                {!activeProduct && (
                   <>
                     <div>
                       <label className="block text-xs font-bold text-slate-200 mb-1.5 flex items-center gap-1.5">
@@ -975,36 +1140,53 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </>
                 )}
 
-                {/* Loja da Oferta (Nome da Loja) */}
+                {/* Loja da Oferta (Nome da Loja com Isolamento de Ofertas ao Clicar) */}
                 <div className="space-y-2">
-                  <label className="block text-xs font-bold text-slate-200 flex items-center gap-1.5">
-                    <StoreIcon className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Nome da Loja Parceira *</span>
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                      <StoreIcon className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Selecione a Loja Parceira *</span>
+                    </label>
+                    {activeProduct && currentStoreHasOffer && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">
+                        ✓ Oferta Existente
+                      </span>
+                    )}
+                  </div>
                   
                   <div className="flex flex-wrap gap-2 mb-2">
-                    {POPULAR_STORES.map(s => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => setManualStoreName(s.name)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors border ${
-                          manualStoreName.toLowerCase() === s.name.toLowerCase()
-                            ? 'bg-amber-400 text-slate-950 border-amber-400 shadow-sm'
-                            : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
-                        }`}
-                      >
-                        {s.name}
-                      </button>
-                    ))}
+                    {POPULAR_STORES.map(s => {
+                      const isSelected = manualStoreName.toLowerCase() === s.name.toLowerCase();
+                      const hasOfferInProduct = Boolean(
+                        activeProduct?.offers?.some(o => o.storeName.toLowerCase() === s.name.toLowerCase())
+                      );
+
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => handleStoreSelect(s.name)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border flex items-center gap-1.5 ${
+                            isSelected
+                              ? 'bg-amber-400 text-slate-950 border-amber-400 shadow-sm'
+                              : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                          }`}
+                        >
+                          <span>{s.name}</span>
+                          {hasOfferInProduct && (
+                            <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-slate-950' : 'bg-emerald-400'}`} />
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
 
                   <input
                     type="text"
                     required
                     value={manualStoreName}
-                    onChange={(e) => setManualStoreName(e.target.value)}
-                    placeholder="Ou digite o nome da loja (Ex: Mercado Livre, Amazon, Shopee...)"
+                    onChange={(e) => handleStoreSelect(e.target.value)}
+                    placeholder="Ou digite o nome de outra loja parceira..."
                     className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors"
                   />
                 </div>
@@ -1014,7 +1196,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <div>
                     <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
                       <DollarSign className="w-3.5 h-3.5 text-slate-400" />
-                      <span>Preço Original / "De" (R$)</span>
+                      <span>Preço Original na {manualStoreName} / "De" (R$)</span>
                     </label>
                     <input
                       type="text"
@@ -1029,7 +1211,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
                         <DollarSign className="w-3.5 h-3.5" />
-                        <span>Preço Promocional / "Por" (R$) *</span>
+                        <span>Preço Promocional na {manualStoreName} / "Por" (R$) *</span>
                       </span>
                       {calculatedDiscount > 0 && (
                         <span className="text-[11px] font-black px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-1">
@@ -1073,14 +1255,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     required
                     value={manualAffiliateUrl}
                     onChange={(e) => setManualAffiliateUrl(e.target.value)}
-                    placeholder="Ex: https://meli.la/xxxx ou https://amzn.to/xxxx..."
+                    placeholder={`Ex: link encurtado da loja ${manualStoreName}...`}
                     className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/50 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 font-mono transition-colors shadow-inner"
                   />
                 </div>
 
-                {/* Categoria & Frete Grátis (Exibidos apenas para produto novo) */}
-                {!selectedExistingProduct && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                {/* Categoria & Frete Grátis */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  {!activeProduct && (
                     <div>
                       <label className="block text-xs font-bold text-slate-300 mb-1.5">
                         Categoria da Vitrine
@@ -1095,32 +1277,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         ))}
                       </select>
                     </div>
+                  )}
 
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                        Opções de Destaque
-                      </label>
-                      <label className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={manualFreeShipping}
-                          onChange={(e) => setManualFreeShipping(e.target.checked)}
-                          className="w-4 h-4 accent-amber-400 rounded"
-                        />
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
-                          <Truck className="w-4 h-4 text-emerald-400" />
-                          <span>Destacar Frete Grátis</span>
-                        </div>
-                      </label>
-                    </div>
+                  <div className={activeProduct ? 'sm:col-span-2' : ''}>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                      Opções de Destaque na {manualStoreName}
+                    </label>
+                    <label className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={manualFreeShipping}
+                        onChange={(e) => setManualFreeShipping(e.target.checked)}
+                        className="w-4 h-4 accent-amber-400 rounded"
+                      />
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
+                        <Truck className="w-4 h-4 text-emerald-400" />
+                        <span>Destacar Frete Grátis nesta Loja</span>
+                      </div>
+                    </label>
                   </div>
-                )}
+                </div>
 
-                {/* Action Buttons */}
+                {/* Action Buttons with Botão de Exclusão Individual de Loja */}
                 <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center gap-3">
                   <button
                     type="submit"
-                    disabled={isSubmitting || (!selectedExistingProduct && !manualTitle) || !manualPrice || (!selectedExistingProduct && !manualImageUrl) || !manualAffiliateUrl}
+                    disabled={isSubmitting || (!activeProduct && !manualTitle) || !manualPrice || (!activeProduct && !manualImageUrl) || !manualAffiliateUrl}
                     className={`flex-1 py-3.5 px-6 rounded-2xl font-black text-slate-950 active:scale-98 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-sm shadow-xl ${
                       selectedExistingProduct
                         ? 'bg-emerald-400 hover:bg-emerald-300 shadow-emerald-400/20'
@@ -1142,14 +1324,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       {isSubmitting 
                         ? 'Processando...' 
                         : selectedExistingProduct 
-                          ? `Adicionar Oferta da ${manualStoreName} ao Produto`
+                          ? `Salvar Oferta da ${manualStoreName} no Produto`
                           : editingProductId 
-                            ? 'Salvar Alterações na Vitrine' 
+                            ? `Salvar Alterações da Loja ${manualStoreName}` 
                             : 'Salvar Novo Produto como Rascunho'}
                     </span>
                   </button>
 
-                  {(selectedExistingProduct || editingProductId) && (
+                  {/* 2. BOTÃO DE EXCLUSÃO INDIVIDUAL DE LOJAS */}
+                  {activeProduct && currentStoreHasOffer && (
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={handleRemoveCurrentStoreOffer}
+                      className="py-3.5 px-4 rounded-2xl font-bold text-rose-300 bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-xs flex items-center gap-1.5 transition-all active:scale-98"
+                      title={`Remover apenas a oferta da loja ${manualStoreName}`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Remover esta Loja ({manualStoreName})</span>
+                    </button>
+                  )}
+
+                  {activeProduct && (
                     <button
                       type="button"
                       onClick={handleClearForm}
@@ -1168,7 +1364,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <div className="flex items-center justify-between px-1">
                   <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
                     <Eye className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Prévia em Tempo Real</span>
+                    <span>Prévia da Oferta</span>
                   </span>
                   <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-800">
                     {manualStoreName || 'Loja'}
@@ -1451,7 +1647,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         )}
 
-        {/* TAB 3: PUBLISHED PRODUCTS COMPARATOR TABLE */}
+        {/* TAB 3: PUBLISHED PRODUCTS COMPARATOR TABLE WITH TOOLBAR FILTERS & SORT */}
         {activeTab === 'published' && (
           <div className="space-y-6 animate-in fade-in duration-150">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 rounded-3xl bg-slate-900 border border-slate-800">
@@ -1463,7 +1659,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
                 <h3 className="text-lg font-black text-white flex items-center gap-2">
                   <ShoppingBag className="w-5 h-5 text-emerald-400" />
-                  <span>Vitrine Publicada & Comparador ({publishedProducts.length})</span>
+                  <span>Vitrine Publicada & Comparador ({displayedPublishedProducts.length} de {publishedProducts.length})</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
                   Produtos ativos no comparador. Clique em <strong>+ Loja</strong> para adicionar ofertas de outras lojas ao mesmo produto.
@@ -1490,19 +1686,84 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             </div>
 
-            {publishedProducts.length === 0 ? (
+            {/* 3. TOOLBAR COM 3 SELECTS (FILTRO CATEGORIA, FILTRO LOJA, ORDENAÇÃO) */}
+            <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-3 shadow-lg">
+              {/* Filtro por Categoria */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5 flex items-center gap-1.5">
+                  <Filter className="w-3 h-3 text-amber-400" />
+                  <span>Filtrar por Categoria:</span>
+                </label>
+                <select
+                  value={tableCategoryFilter}
+                  onChange={(e) => setTableCategoryFilter(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 transition-colors"
+                >
+                  <option value="all">Todas as Categorias ({publishedProducts.length})</option>
+                  {uniqueCategories.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat} ({publishedProducts.filter(p => (p.categoryName || 'Geral') === cat).length})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Filtro por Loja */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5 flex items-center gap-1.5">
+                  <StoreIcon className="w-3 h-3 text-emerald-400" />
+                  <span>Filtrar por Loja:</span>
+                </label>
+                <select
+                  value={tableStoreFilter}
+                  onChange={(e) => setTableStoreFilter(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 transition-colors"
+                >
+                  <option value="all">Todas as Lojas ({publishedProducts.length})</option>
+                  {uniqueStores.map((store) => (
+                    <option key={store} value={store}>
+                      {store} ({publishedProducts.filter(p => p.offers?.some(o => o.storeName.toLowerCase() === store.toLowerCase()) || p.bestStore?.toLowerCase() === store.toLowerCase()).length})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Ordenação */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5 flex items-center gap-1.5">
+                  <ArrowUpDown className="w-3 h-3 text-sky-400" />
+                  <span>Ordenar por:</span>
+                </label>
+                <select
+                  value={tableSortBy}
+                  onChange={(e) => setTableSortBy(e.target.value as any)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 transition-colors"
+                >
+                  <option value="name-asc">Nome (A-Z)</option>
+                  <option value="name-desc">Nome (Z-A)</option>
+                  <option value="price-asc">Menor Preço</option>
+                  <option value="price-desc">Maior Preço</option>
+                </select>
+              </div>
+            </div>
+
+            {displayedPublishedProducts.length === 0 ? (
               <div className="p-12 rounded-3xl bg-slate-900/60 border border-slate-800 text-center space-y-3">
                 <ShoppingBag className="w-10 h-10 text-slate-600 mx-auto" />
-                <h4 className="text-base font-bold text-white">Nenhum produto publicado</h4>
+                <h4 className="text-base font-bold text-white">Nenhum produto corresponde aos filtros</h4>
                 <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                  Cadastre ofertas no formulário e publique-as na Fila de Rascunhos.
+                  Tente alterar ou limpar os filtros de categoria e loja acima.
                 </p>
                 <button
-                  onClick={() => setActiveTab('create')}
-                  className="px-5 py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs inline-flex items-center gap-2 shadow-lg shadow-amber-400/20 mt-2"
+                  onClick={() => {
+                    setTableCategoryFilter('all');
+                    setTableStoreFilter('all');
+                    setTableSortBy('name-asc');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-200 hover:text-white font-bold text-xs inline-flex items-center gap-1.5"
                 >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Cadastrar Oferta</span>
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Limpar Filtros</span>
                 </button>
               </div>
             ) : (
@@ -1520,7 +1781,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60">
-                      {publishedProducts.map((prod) => {
+                      {displayedPublishedProducts.map((prod) => {
                         const offersCount = prod.offers?.length || 1;
 
                         return (
@@ -1570,13 +1831,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             <td className="py-4 px-4">
                               <div className="flex flex-wrap items-center gap-1.5 max-w-[220px]">
                                 {prod.offers?.map((off) => (
-                                  <span
+                                  <button
                                     key={off.id}
-                                    className="px-2 py-0.5 rounded-md bg-slate-950 border border-slate-800 text-[10px] font-semibold text-slate-300 flex items-center gap-1"
+                                    type="button"
+                                    onClick={() => {
+                                      handleEditPublishedProduct(prod);
+                                      handleStoreSelect(off.storeName);
+                                    }}
+                                    className="px-2 py-0.5 rounded-md bg-slate-950 border border-slate-800 text-[10px] font-semibold text-slate-300 hover:border-amber-400 hover:text-amber-300 transition-colors flex items-center gap-1 cursor-pointer"
+                                    title={`Editar oferta da ${off.storeName}`}
                                   >
                                     <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
                                     <span>{off.storeName.split(' ')[0]}: R$ {off.price.toFixed(0)}</span>
-                                  </span>
+                                  </button>
                                 ))}
                               </div>
                             </td>
@@ -1613,7 +1880,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                 <button
                                   onClick={() => handleDeletePublishedProduct(prod.id)}
                                   className="px-2.5 py-1.5 rounded-xl bg-rose-950/50 hover:bg-rose-900 text-rose-300 border border-rose-800/80 text-xs font-bold flex items-center gap-1 transition-colors shadow-sm"
-                                  title="Excluir produto da Vitrine"
+                                  title="Excluir produto completo da Vitrine"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                   <span>Remover</span>

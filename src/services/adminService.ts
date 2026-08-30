@@ -623,7 +623,7 @@ export const deletePublishedProduct = async (productId: string): Promise<void> =
 };
 
 /**
- * Updates a published product in the live database and local cache
+ * Updates a published product and its specific store offer in the live database and local cache
  */
 export const updatePublishedProduct = async (
   productId: string,
@@ -644,41 +644,67 @@ export const updatePublishedProduct = async (
     ? Math.round(((updatedOriginalPrice - updatedPrice) / updatedOriginalPrice) * 100)
     : 0;
 
-  // Update primary offer or push updated offer
-  const updatedOffers: StoreOffer[] = targetProduct.offers && targetProduct.offers.length > 0
-    ? targetProduct.offers.map((offer, idx) => {
-        if (idx === 0) {
-          return {
-            ...offer,
-            price: updatedPrice,
-            originalPrice: updatedOriginalPrice,
-            discountPercent,
-            currency: 'BRL',
-            affiliateUrl: updates.affiliateUrl || offer.affiliateUrl,
-            storeName: updates.storeName || offer.storeName,
-            freeShipping: updates.freeShipping !== undefined ? updates.freeShipping : offer.freeShipping,
-            lastUpdated: new Date().toISOString(),
-          };
-        }
-        return offer;
-      })
-    : [{
-        id: `offer-${Date.now()}-1`,
-        storeId: 'mercadolivre' as StoreId,
-        storeName: updates.storeName || targetProduct.bestStore || 'Mercado Livre',
-        storeLogo: 'https://images.unsplash.com/photo-1557821552-17105176677c?w=100&auto=format&fit=crop&q=80',
-        price: updatedPrice,
-        originalPrice: updatedOriginalPrice,
-        discountPercent,
-        currency: 'BRL',
-        affiliateUrl: updates.affiliateUrl || '#',
-        inStock: true,
-        freeShipping: updates.freeShipping ?? true,
-        installment: '10x sem juros',
-        rating: 4.8,
-        reviewsCount: 100,
-        lastUpdated: new Date().toISOString(),
-      }];
+  const currentStoreName = updates.storeName || targetProduct.bestStore || 'Mercado Livre';
+  const rawStore = currentStoreName.toLowerCase().replace(/\s+/g, '');
+  let storeId: StoreId = 'mercadolivre';
+  if (rawStore.includes('amazon')) storeId = 'amazon';
+  else if (rawStore.includes('shopee')) storeId = 'shopee';
+  else if (rawStore.includes('magalu') || rawStore.includes('magazine')) storeId = 'magalu';
+  else if (rawStore.includes('kabum')) storeId = 'kabum';
+
+  const newOrUpdatedOffer: StoreOffer = {
+    id: `offer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    storeId,
+    storeName: currentStoreName,
+    storeLogo: 'https://images.unsplash.com/photo-1557821552-17105176677c?w=100&auto=format&fit=crop&q=80',
+    price: updatedPrice,
+    originalPrice: updatedOriginalPrice,
+    discountPercent,
+    currency: 'BRL',
+    affiliateUrl: updates.affiliateUrl || '#',
+    inStock: true,
+    freeShipping: updates.freeShipping !== undefined ? updates.freeShipping : true,
+    installment: '10x sem juros',
+    rating: 4.8,
+    reviewsCount: 100,
+    lastUpdated: new Date().toISOString(),
+  };
+
+  const existingOffers = targetProduct.offers ? [...targetProduct.offers] : [];
+  const existingOfferIndex = existingOffers.findIndex(
+    (o) => o.storeName.toLowerCase() === currentStoreName.toLowerCase()
+  );
+
+  let updatedOffers: StoreOffer[];
+  if (existingOfferIndex !== -1) {
+    // Preserve existing offer ID if updating
+    updatedOffers = existingOffers.map((off, idx) => {
+      if (idx === existingOfferIndex) {
+        return {
+          ...off,
+          price: updatedPrice,
+          originalPrice: updatedOriginalPrice,
+          discountPercent,
+          currency: 'BRL',
+          affiliateUrl: updates.affiliateUrl || off.affiliateUrl,
+          storeName: currentStoreName,
+          storeId,
+          freeShipping: updates.freeShipping !== undefined ? updates.freeShipping : off.freeShipping,
+          lastUpdated: new Date().toISOString(),
+        };
+      }
+      return off;
+    });
+  } else {
+    // Append new store offer to the existing offers array
+    updatedOffers = [...existingOffers, newOrUpdatedOffer];
+  }
+
+  // Sort offers by price ascending (cheapest first)
+  updatedOffers.sort((a, b) => a.price - b.price);
+  const bestOffer = updatedOffers[0];
+  const lowestPrice = bestOffer.price;
+  const highestPrice = Math.max(...updatedOffers.map((o) => o.originalPrice || o.price));
 
   const updatedProduct: Product = {
     ...targetProduct,
@@ -688,9 +714,10 @@ export const updatePublishedProduct = async (
     categoryName: updates.categoryName || targetProduct.categoryName,
     subcategoryId: updates.subcategoryId || targetProduct.subcategoryId,
     subcategoryName: updates.subcategoryName || targetProduct.subcategoryName,
-    bestStore: updates.storeName || targetProduct.bestStore,
-    minPrice: updatedPrice,
-    maxPrice: updatedOriginalPrice,
+    bestStore: bestOffer.storeName,
+    bestStoreId: bestOffer.storeId,
+    minPrice: lowestPrice,
+    maxPrice: highestPrice,
     offers: updatedOffers,
     updatedAt: new Date().toISOString(),
   };
@@ -707,6 +734,7 @@ export const updatePublishedProduct = async (
           subcategory_id: updatedProduct.subcategoryId,
           subcategory_name: updatedProduct.subcategoryName,
           best_store: updatedProduct.bestStore,
+          best_store_id: updatedProduct.bestStoreId,
           min_price: updatedProduct.minPrice,
           max_price: updatedProduct.maxPrice,
           offers: updatedProduct.offers,
@@ -715,6 +743,77 @@ export const updatePublishedProduct = async (
         .eq('id', productId);
     } catch (err) {
       console.warn('Supabase updatePublishedProduct error:', err);
+    }
+  }
+
+  // Update local storage
+  const custom = getStoredCustomProducts();
+  const idx = custom.findIndex((p) => p.id === productId);
+  if (idx !== -1) {
+    custom[idx] = updatedProduct;
+    saveStoredCustomProducts(custom);
+  } else {
+    saveStoredCustomProducts([updatedProduct, ...custom]);
+  }
+
+  return updatedProduct;
+};
+
+/**
+ * Removes a specific store offer from an existing product's offers array
+ */
+export const removeStoreOfferFromProduct = async (
+  productId: string,
+  storeName: string
+): Promise<Product> => {
+  await requireAuthSession();
+
+  const existingProducts = await fetchAllGlobalProducts();
+  const targetProduct = existingProducts.find((p) => p.id === productId);
+
+  if (!targetProduct) {
+    throw new Error('Produto não encontrado na base de dados.');
+  }
+
+  const existingOffers = targetProduct.offers || [];
+  const remainingOffers = existingOffers.filter(
+    (o) => o.storeName.toLowerCase() !== storeName.toLowerCase()
+  );
+
+  if (remainingOffers.length === 0) {
+    throw new Error('O produto precisa ter pelo menos 1 loja cadastrada. Para excluir o produto inteiro da vitrine, utilize a opção "Remover" na tabela.');
+  }
+
+  remainingOffers.sort((a, b) => a.price - b.price);
+  const bestOffer = remainingOffers[0];
+  const lowestPrice = bestOffer.price;
+  const highestPrice = Math.max(...remainingOffers.map((o) => o.originalPrice || o.price));
+
+  const updatedProduct: Product = {
+    ...targetProduct,
+    bestStore: bestOffer.storeName,
+    bestStoreId: bestOffer.storeId,
+    minPrice: lowestPrice,
+    maxPrice: highestPrice,
+    offers: remainingOffers,
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (isSupabaseConfigured) {
+    try {
+      await supabase
+        .from('products')
+        .update({
+          best_store: updatedProduct.bestStore,
+          best_store_id: updatedProduct.bestStoreId,
+          min_price: updatedProduct.minPrice,
+          max_price: updatedProduct.maxPrice,
+          offers: updatedProduct.offers,
+          updated_at: updatedProduct.updatedAt,
+        })
+        .eq('id', productId);
+    } catch (err) {
+      console.warn('Supabase removeStoreOfferFromProduct error:', err);
     }
   }
 
