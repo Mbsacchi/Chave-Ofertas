@@ -18,6 +18,7 @@ import {
   fetchAllGlobalProducts
 } from '../services/adminService';
 import { DraftProduct, Product, StoreId } from '../types';
+import { fuzzyMatch } from '../lib/search/fuzzyMatch';
 import { 
   ShieldCheck, 
   Lock, 
@@ -77,7 +78,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onBackToVitrine,
   onProductPublished 
 }) => {
-  // Auth state
+  // Auth state - generic empty string initial value
   const [sessionUser, setSessionUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [email, setEmail] = useState('');
@@ -92,7 +93,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [draftsLoading, setDraftsLoading] = useState(false);
   const [publishedProducts, setPublishedProducts] = useState<Product[]>([]);
 
-  // Autocomplete Search states
+  // Autocomplete Search states with Fuzzy Search support
   const [searchQuery, setSearchQuery] = useState('');
   const [suggestions, setSuggestions] = useState<Product[]>([]);
   const [selectedExistingProduct, setSelectedExistingProduct] = useState<Product | null>(null);
@@ -291,7 +292,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  // Real-time search and filter existing products across the full global catalog
+  // 2. BUSCA APROXIMADA (FUZZY SEARCH COM LEVENSHTEIN) NO AUTOCOMPLETE
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setSearchQuery(value);
@@ -302,14 +303,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
-    const term = value.toLowerCase();
-    const matches = publishedProducts.filter(
-      (p) =>
-        p.title.toLowerCase().includes(term) ||
-        p.brand?.toLowerCase().includes(term) ||
-        p.categoryName?.toLowerCase().includes(term) ||
-        p.offers?.some(o => o.storeName.toLowerCase().includes(term))
-    );
+    const matches = publishedProducts.filter((p) => {
+      // 1. Testar título com similaridade de string (Fuzzy/Levenshtein)
+      if (fuzzyMatch(p.title, value)) return true;
+
+      // 2. Testar marca
+      if (p.brand && fuzzyMatch(p.brand, value)) return true;
+
+      // 3. Testar categoria
+      if (p.categoryName && fuzzyMatch(p.categoryName, value)) return true;
+
+      // 4. Testar nomes das lojas parceiras nas ofertas
+      if (p.offers && p.offers.some(o => fuzzyMatch(o.storeName, value))) return true;
+
+      // 5. Testar palavras-chave de busca
+      if (p.searchKeywords && p.searchKeywords.some(k => fuzzyMatch(k, value))) return true;
+
+      return false;
+    });
 
     setSuggestions(matches);
 
@@ -473,7 +484,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  // 2. EXCLUSÃO INDIVIDUAL DE LOJAS
+  // 3. EXCLUSÃO INDIVIDUAL DE LOJAS
   const handleRemoveCurrentStoreOffer = async () => {
     if (!activeProduct) return;
 
@@ -609,7 +620,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setTimeout(() => setCopiedSql(false), 3000);
   };
 
-  // 3. FILTROS E ORDENAÇÃO NA TABELA (Vitrine Publicada)
+  // 4. FILTROS E ORDENAÇÃO NA TABELA (Vitrine Publicada)
   const uniqueCategories = useMemo(() => {
     return Array.from(
       new Set(publishedProducts.map((p) => p.categoryName || 'Geral'))
@@ -678,7 +689,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     );
   }
 
-  // LOGIN SCREEN
+  // LOGIN SCREEN (100% GENERIC & SECURE)
   if (!sessionUser) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
@@ -715,7 +726,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="murilobozolans@gmail.com"
+                  placeholder="ex: admin@seu-site.com"
                   className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors"
                 />
               </div>
@@ -921,18 +932,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </button>
         </div>
 
-        {/* TAB 1: COMPARATOR FORM WITH AUTOCOMPLETE & ISOLATED STORE OFFERS */}
+        {/* TAB 1: COMPARATOR FORM WITH AUTOCOMPLETE (FUZZY SEARCH) & ISOLATED STORE OFFERS */}
         {activeTab === 'create' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-150">
             {/* Form Section */}
             <div className="lg:col-span-8 p-6 sm:p-8 rounded-3xl bg-slate-900 border border-slate-800 space-y-6 shadow-xl">
               
-              {/* Autocomplete Search for Existing Products */}
+              {/* Autocomplete Search for Existing Products (Fuzzy Search Enabled) */}
               <div ref={searchDropdownRef} className="space-y-2 pb-5 border-b border-slate-800 relative">
                 <div className="flex items-center justify-between">
                   <label className="block text-xs font-bold text-slate-200 flex items-center gap-1.5">
                     <Search className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Buscar produto existente na Vitrine</span>
+                    <span>Buscar produto existente na Vitrine (Busca Inteligente / Fuzzy)</span>
                   </label>
                   {(searchQuery || selectedExistingProduct || editingProductId) && (
                     <button
@@ -951,7 +962,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     type="text"
                     value={searchQuery}
                     onChange={handleSearchChange}
-                    placeholder="Buscar produto existente... (Digite o nome do produto)"
+                    placeholder="Buscar produto existente... (Ex: playstatin, iphne, jbl, samsung...)"
                     className="w-full pl-10 pr-10 py-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
                   />
                   <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-4" />
@@ -973,7 +984,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <div className="px-4 py-2 bg-gray-50 dark:bg-slate-950/80 text-[11px] text-amber-600 dark:text-amber-400 font-bold flex items-center justify-between border-b border-gray-100 dark:border-slate-800">
                       <span className="flex items-center gap-1.5">
                         <Sparkles className="w-3.5 h-3.5" />
-                        <span>{suggestions.length} produto(s) encontrado(s):</span>
+                        <span>{suggestions.length} produto(s) encontrado(s) (Fuzzy Match):</span>
                       </span>
                       <span className="text-[10px] text-gray-400">Clique para selecionar</span>
                     </div>
@@ -1331,7 +1342,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </span>
                   </button>
 
-                  {/* 2. BOTÃO DE EXCLUSÃO INDIVIDUAL DE LOJAS */}
+                  {/* BOTÃO DE EXCLUSÃO INDIVIDUAL DE LOJAS */}
                   {activeProduct && currentStoreHasOffer && (
                     <button
                       type="button"
@@ -1686,7 +1697,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             </div>
 
-            {/* 3. TOOLBAR COM 3 SELECTS (FILTRO CATEGORIA, FILTRO LOJA, ORDENAÇÃO) */}
+            {/* TOOLBAR COM 3 SELECTS (FILTRO CATEGORIA, FILTRO LOJA, ORDENAÇÃO) */}
             <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-3 shadow-lg">
               {/* Filtro por Categoria */}
               <div>
