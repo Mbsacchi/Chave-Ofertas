@@ -107,11 +107,13 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
               </div>
             )}
 
-            <img
-              src={product.imageUrl}
-              alt={product.title}
-              className="max-h-40 sm:max-h-56 w-auto max-w-full object-contain transition-transform duration-300 group-hover:scale-105"
-            />
+            <div className="w-full h-full bg-white rounded-lg p-3 flex items-center justify-center shadow-sm">
+              <img
+                src={product.imageUrl}
+                alt={product.title}
+                className="max-h-40 sm:max-h-56 w-auto max-w-full object-contain transition-transform duration-300 group-hover:scale-105"
+              />
+            </div>
             <button
               onClick={() => toggleFavorite(product.id)}
               className={`absolute top-2.5 right-2.5 p-2 rounded-full border shadow-sm transition-all active:scale-90 ${

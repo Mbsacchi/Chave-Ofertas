@@ -124,12 +124,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             </div>
           )}
 
-          <img
-            src={product.imageUrl}
-            alt={product.title}
-            className="max-h-36 sm:max-h-40 w-auto object-contain transition-transform duration-300 group-hover:scale-108"
-            loading="lazy"
-          />
+          <div className="w-full h-full bg-white rounded-lg p-2 flex items-center justify-center shadow-sm">
+            <img
+              src={product.imageUrl}
+              alt={product.title}
+              className="max-h-36 sm:max-h-40 w-auto max-w-full object-contain transition-transform duration-300 group-hover:scale-108"
+              loading="lazy"
+            />
+          </div>
         </div>
 
         {/* Brand, Rating & Title */}

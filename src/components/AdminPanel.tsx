@@ -11,7 +11,8 @@ import {
   updateDraftProduct, 
   deleteDraftProduct, 
   publishDraftToVitrine, 
-  createAndPublishManualProduct,
+  deletePublishedProduct,
+  updatePublishedProduct,
   fetchLiveDatabaseProducts
 } from '../services/adminService';
 import { DraftProduct, Product } from '../types';
@@ -38,7 +39,9 @@ import {
   Link as LinkIcon, 
   Truck, 
   RotateCcw, 
-  PlusCircle 
+  Pencil,
+  Percent,
+  FileEdit
 } from 'lucide-react';
 import { CATEGORIES_TREE } from '../data/mockData';
 
@@ -67,12 +70,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Active view tab in admin
   const [activeTab, setActiveTab] = useState<'create' | 'staging' | 'published' | 'sql'>('create');
 
-  // Manual 4 Required Form Fields
+  // Edit Mode state
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+
+  // Form Fields (Original Price before Promotional Price)
   const [manualTitle, setManualTitle] = useState('');
+  const [manualOriginalPrice, setManualOriginalPrice] = useState('');
   const [manualPrice, setManualPrice] = useState('');
   const [manualImageUrl, setManualImageUrl] = useState('');
   const [manualAffiliateUrl, setManualAffiliateUrl] = useState('');
   const [manualCategoryId, setManualCategoryId] = useState(CATEGORIES_TREE[0]?.id || 'eletronicos');
+  const [manualFreeShipping, setManualFreeShipping] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Staging Drafts & Published state
@@ -182,16 +190,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     showFeedback('success', 'Sessão encerrada com sucesso.');
   };
 
+  // Helper to parse numeric float
+  const parseNum = (str: string) => {
+    const clean = str.toString().replace(/[^\d.,]/g, '').replace(',', '.');
+    const val = parseFloat(clean);
+    return isNaN(val) ? 0 : val;
+  };
+
+  // Discount calculation formula
+  const calcDiscountPercent = (orig: number, promo: number): number => {
+    if (orig > promo && promo > 0) {
+      return Math.round(((orig - promo) / orig) * 100);
+    }
+    return 0;
+  };
+
+  const currentParsedOriginalPrice = parseNum(manualOriginalPrice);
+  const currentParsedPrice = parseNum(manualPrice);
+  const calculatedDiscount = calcDiscountPercent(currentParsedOriginalPrice, currentParsedPrice);
+
   // Clear Form inputs
   const handleClearForm = () => {
+    setEditingProductId(null);
     setManualTitle('');
+    setManualOriginalPrice('');
     setManualPrice('');
     setManualImageUrl('');
     setManualAffiliateUrl('');
+    setManualFreeShipping(true);
   };
 
-  // Submit Manual Form directly to Vitrine
-  const handleCreateProductToVitrine = async (e: React.FormEvent) => {
+  // Save as Draft (Default mandatory flow) or Update Existing Published Product
+  const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
     
     // 1. Validar Título
@@ -200,11 +230,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
-    // 2. Validar Preço
-    const cleanPriceStr = manualPrice.toString().replace(/[^\d.,]/g, '').replace(',', '.');
-    const numericPrice = parseFloat(cleanPriceStr);
-    if (isNaN(numericPrice) || numericPrice <= 0) {
-      showFeedback('error', 'Por favor, informe um Preço numérico válido.');
+    // 2. Validar Preço Promocional
+    if (currentParsedPrice <= 0) {
+      showFeedback('error', 'Por favor, informe um Preço Promocional válido.');
       return;
     }
 
@@ -220,87 +248,102 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
+    // Calcular Preço Original se não preenchido ou menor que o promocional
+    let finalOriginalPrice = currentParsedOriginalPrice;
+    if (finalOriginalPrice <= currentParsedPrice) {
+      finalOriginalPrice = Math.round(currentParsedPrice * 1.15);
+    }
+    const finalDiscountPercent = calcDiscountPercent(finalOriginalPrice, currentParsedPrice) || 15;
+
     setIsSubmitting(true);
     try {
       const selectedCategory = CATEGORIES_TREE.find(c => c.id === manualCategoryId) || CATEGORIES_TREE[0];
       const defaultSubcategory = selectedCategory.subcategories[0];
-      const estimatedOriginalPrice = Math.round(numericPrice * 1.15);
 
-      const newProduct = await createAndPublishManualProduct({
-        title: manualTitle.trim(),
-        price: numericPrice,
-        originalPrice: estimatedOriginalPrice,
-        imageUrl: manualImageUrl.trim(),
-        affiliateUrl: manualAffiliateUrl.trim(),
-        brand: 'Mercado Livre',
-        categoryId: selectedCategory.id,
-        categoryName: selectedCategory.name,
-        subcategoryId: defaultSubcategory?.id,
-        subcategoryName: defaultSubcategory?.name,
-        storeName: 'Mercado Livre',
-        storeId: 'mercadolivre',
-        freeShipping: true,
-      });
+      // Se estiver editando um produto publicado existente
+      if (editingProductId) {
+        const updated = await updatePublishedProduct(editingProductId, {
+          title: manualTitle.trim(),
+          price: currentParsedPrice,
+          originalPrice: finalOriginalPrice,
+          imageUrl: manualImageUrl.trim(),
+          affiliateUrl: manualAffiliateUrl.trim(),
+          categoryId: selectedCategory.id,
+          categoryName: selectedCategory.name,
+          subcategoryId: defaultSubcategory?.id,
+          subcategoryName: defaultSubcategory?.name,
+          freeShipping: manualFreeShipping,
+        });
 
-      // Update state & notify app
-      setPublishedProducts(prev => [newProduct, ...prev]);
-      onProductPublished?.(newProduct);
+        setPublishedProducts(prev => prev.map(p => (p.id === editingProductId ? updated : p)));
+        onProductPublished?.(updated);
+        handleClearForm();
+        showFeedback('success', `Produto "${updated.title.slice(0, 30)}..." atualizado com sucesso na Vitrine!`);
+        setActiveTab('published');
+      } else {
+        // Fluxo Obrigatório de Rascunho
+        const newDraft = await addDraftProduct({
+          externalId: `manual-${Date.now()}`,
+          title: manualTitle.trim(),
+          brand: 'Mercado Livre',
+          description: `${manualTitle.trim()} com garantia oficial e melhores condições no Mercado Livre.`,
+          categoryId: selectedCategory.id,
+          categoryName: selectedCategory.name,
+          subcategoryId: defaultSubcategory?.id,
+          subcategoryName: defaultSubcategory?.name,
+          imageUrl: manualImageUrl.trim(),
+          originalPrice: finalOriginalPrice,
+          promotionalPrice: currentParsedPrice,
+          discountPercent: finalDiscountPercent,
+          affiliateUrl: manualAffiliateUrl.trim(),
+          storeId: 'mercadolivre',
+          storeName: 'Mercado Livre',
+          freeShipping: manualFreeShipping,
+          installment: '10x sem juros',
+        });
 
-      // Limpar os 4 campos
-      handleClearForm();
+        setDrafts(prev => [newDraft, ...prev]);
+        handleClearForm();
+        showFeedback('success', `"${newDraft.title.slice(0, 30)}..." salvo na Fila de Rascunhos (status: draft)!`);
+        setActiveTab('staging');
+      }
 
-      showFeedback('success', `"${newProduct.title.slice(0, 30)}..." adicionado à Vitrine com sucesso!`);
       loadDraftsAndProducts();
     } catch (err: any) {
-      showFeedback('error', err.message || 'Erro ao adicionar produto à vitrine.');
+      showFeedback('error', err.message || 'Erro ao processar formulário.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Save as Draft in Staging Queue
-  const handleSaveAsDraft = async () => {
-    if (!manualTitle.trim()) {
-      showFeedback('error', 'Por favor, preencha pelo menos o Título do Produto.');
+  // Start Editing Published Product
+  const handleEditPublishedProduct = (product: Product) => {
+    const primaryOffer = product.offers[0];
+    setEditingProductId(product.id);
+    setManualTitle(product.title);
+    setManualOriginalPrice(product.maxPrice ? product.maxPrice.toString() : '');
+    setManualPrice(product.minPrice ? product.minPrice.toString() : '');
+    setManualImageUrl(product.imageUrl);
+    setManualAffiliateUrl(primaryOffer?.affiliateUrl || '');
+    setManualCategoryId(product.categoryId);
+    setManualFreeShipping(primaryOffer?.freeShipping ?? true);
+
+    setActiveTab('create');
+    showFeedback('success', `Carregando "${product.title.slice(0, 25)}..." para edição no formulário.`);
+  };
+
+  // Delete Published Product
+  const handleDeletePublishedProduct = async (productId: string) => {
+    if (!window.confirm('Tem certeza que deseja remover este produto da Vitrine Publicada?')) {
       return;
     }
-    const cleanPriceStr = manualPrice.toString().replace(/[^\d.,]/g, '').replace(',', '.');
-    const numericPrice = parseFloat(cleanPriceStr) || 0;
 
-    setIsSubmitting(true);
     try {
-      const selectedCategory = CATEGORIES_TREE.find(c => c.id === manualCategoryId) || CATEGORIES_TREE[0];
-      const defaultSubcategory = selectedCategory.subcategories[0];
-      const estimatedOriginalPrice = Math.round(numericPrice * 1.15);
-
-      const newDraft = await addDraftProduct({
-        externalId: `manual-${Date.now()}`,
-        title: manualTitle.trim(),
-        brand: 'Mercado Livre',
-        description: `${manualTitle.trim()} com garantia oficial e melhores condições no Mercado Livre.`,
-        categoryId: selectedCategory.id,
-        categoryName: selectedCategory.name,
-        subcategoryId: defaultSubcategory?.id,
-        subcategoryName: defaultSubcategory?.name,
-        imageUrl: manualImageUrl.trim() || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=600&auto=format&fit=crop&q=80',
-        originalPrice: estimatedOriginalPrice,
-        promotionalPrice: numericPrice,
-        discountPercent: 15,
-        affiliateUrl: manualAffiliateUrl.trim(),
-        storeId: 'mercadolivre',
-        storeName: 'Mercado Livre',
-        freeShipping: true,
-        installment: '10x sem juros',
-      });
-
-      setDrafts(prev => [newDraft, ...prev]);
-      handleClearForm();
-      showFeedback('success', `"${newDraft.title.slice(0, 30)}..." salvo na Fila de Rascunhos!`);
-      setActiveTab('staging');
+      await deletePublishedProduct(productId);
+      setPublishedProducts(prev => prev.filter(p => p.id !== productId));
+      showFeedback('success', 'Produto removido da Vitrine com sucesso.');
     } catch (err: any) {
-      showFeedback('error', err.message || 'Erro ao salvar rascunho.');
-    } finally {
-      setIsSubmitting(false);
+      showFeedback('error', err.message || 'Erro ao excluir produto.');
     }
   };
 
@@ -325,7 +368,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  // Publish Draft from Staging to Live Vitrine
+  // Publish Draft from Staging to Live Vitrine (moves status from draft to published)
   const handlePublishDraft = async (draft: DraftProduct) => {
     if (!draft.affiliateUrl || !draft.affiliateUrl.trim()) {
       showFeedback('error', 'Por favor, insira o link de afiliado antes de publicar.');
@@ -337,7 +380,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setDrafts(prev => prev.filter(d => d.id !== draft.id));
       setPublishedProducts(prev => [published, ...prev]);
       onProductPublished?.(published);
-      showFeedback('success', `"${published.title.slice(0, 30)}..." publicado com sucesso na Vitrine!`);
+      showFeedback('success', `"${published.title.slice(0, 30)}..." publicado com sucesso na Vitrine Oficial!`);
+      setActiveTab('published');
     } catch (err: any) {
       showFeedback('error', err.message || 'Erro ao publicar produto.');
     }
@@ -441,9 +485,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     );
   }
 
-  // Live preview helpers
-  const parsedPrice = parseFloat(manualPrice.replace(',', '.')) || 0;
-
   // AUTHENTICATED ADMIN DASHBOARD
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-20">
@@ -537,8 +578,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
             }`}
           >
-            <PlusCircle className="w-4 h-4" />
-            <span>Cadastrar Oferta Manual</span>
+            {editingProductId ? <FileEdit className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
+            <span>{editingProductId ? 'Editando Oferta' : 'Cadastrar Oferta'}</span>
           </button>
 
           <button
@@ -590,40 +631,51 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </button>
         </div>
 
-        {/* TAB 1: CLEAN MANUAL 4-FIELD REGISTRATION */}
+        {/* TAB 1: FORM WITH AUTOMATIC DISCOUNT & DRAFT/UPDATE FLOW */}
         {activeTab === 'create' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-150">
-            {/* Form Section (4 Fields) */}
+            {/* Form Section */}
             <div className="lg:col-span-8 p-6 sm:p-8 rounded-3xl bg-slate-900 border border-slate-800 space-y-6 shadow-xl">
               <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                 <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
+                      editingProductId
+                        ? 'bg-sky-400/10 text-sky-400 border border-sky-400/20'
+                        : 'bg-amber-400/10 text-amber-400 border border-amber-400/20'
+                    }`}>
+                      {editingProductId ? 'Modo de Edição' : 'Novo Cadastro • Rascunho Padrão'}
+                    </span>
+                  </div>
                   <h3 className="text-xl font-black text-white flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-amber-400" />
-                    <span>Cadastro Direto de Oferta</span>
+                    {editingProductId ? <Pencil className="w-5 h-5 text-sky-400" /> : <Sparkles className="w-5 h-5 text-amber-400" />}
+                    <span>{editingProductId ? 'Editar Oferta Publicada' : 'Cadastrar Oferta Manual'}</span>
                   </h3>
                   <p className="text-xs text-slate-400 mt-1">
-                    Preencha os 4 campos abaixo com as informações do seu painel de afiliados.
+                    {editingProductId 
+                      ? 'Atualize os dados e salve diretamente na Vitrine Oficial.' 
+                      : 'Preencha os dados da oferta. Ao submeter, o produto é salvo como rascunho com status draft.'}
                   </p>
                 </div>
 
-                {(manualTitle || manualPrice || manualImageUrl || manualAffiliateUrl) && (
+                {(manualTitle || manualPrice || manualOriginalPrice || manualImageUrl || manualAffiliateUrl || editingProductId) && (
                   <button
                     type="button"
                     onClick={handleClearForm}
                     className="text-xs text-slate-400 hover:text-rose-400 font-bold flex items-center gap-1 transition-colors"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Limpar</span>
+                    <span>{editingProductId ? 'Cancelar Edição' : 'Limpar'}</span>
                   </button>
                 )}
               </div>
 
-              <form onSubmit={handleCreateProductToVitrine} className="space-y-5">
+              <form onSubmit={handleSubmitForm} className="space-y-5">
                 {/* 1. Título do Produto */}
                 <div>
                   <label className="block text-xs font-bold text-slate-200 mb-1.5 flex items-center gap-1.5">
                     <Tag className="w-3.5 h-3.5 text-amber-400" />
-                    <span>1. Título do Produto *</span>
+                    <span>Título do Produto *</span>
                   </label>
                   <input
                     type="text"
@@ -635,12 +687,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   />
                 </div>
 
-                {/* 2. Preço */}
+                {/* 2. Preço Original / De (R$) ANTES do Preço Promocional com Cálculo de Desconto */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center gap-1.5">
-                      <DollarSign className="w-3.5 h-3.5" />
-                      <span>2. Preço Promocional (R$) *</span>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Preço Original / "De" (R$)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={manualOriginalPrice}
+                      onChange={(e) => setManualOriginalPrice(e.target.value)}
+                      placeholder="Ex: 299.90"
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm font-semibold text-slate-200 placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <DollarSign className="w-3.5 h-3.5" />
+                        <span>Preço Promocional / "Por" (R$) *</span>
+                      </span>
+                      {calculatedDiscount > 0 && (
+                        <span className="text-[11px] font-black px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-1">
+                          <Percent className="w-3 h-3" />
+                          <span>{calculatedDiscount}% OFF</span>
+                        </span>
+                      )}
                     </label>
                     <input
                       type="text"
@@ -651,28 +725,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/40 text-sm font-black text-amber-400 placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
                     />
                   </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                      Categoria da Vitrine
-                    </label>
-                    <select
-                      value={manualCategoryId}
-                      onChange={(e) => setManualCategoryId(e.target.value)}
-                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 transition-colors"
-                    >
-                      {CATEGORIES_TREE.map(cat => (
-                        <option key={cat.id} value={cat.id}>{cat.name}</option>
-                      ))}
-                    </select>
-                  </div>
                 </div>
 
                 {/* 3. URL da Imagem */}
                 <div>
                   <label className="block text-xs font-bold text-slate-200 mb-1.5 flex items-center gap-1.5">
                     <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
-                    <span>3. URL da Imagem (Link da foto) *</span>
+                    <span>URL da Imagem do Produto *</span>
                   </label>
                   <input
                     type="url"
@@ -684,12 +743,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   />
                 </div>
 
-                {/* 4. Link de Afiliado (URL encurtada) */}
+                {/* 4. Link de Afiliado (URL Encurtada) */}
                 <div>
                   <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center justify-between">
                     <span className="flex items-center gap-1.5">
                       <LinkIcon className="w-3.5 h-3.5" />
-                      <span>4. Link de Afiliado (URL Encurtada / Destino de Compra) *</span>
+                      <span>Link de Afiliado (URL Encurtada / Destino de Compra) *</span>
                     </span>
                     {manualAffiliateUrl && (
                       <a
@@ -713,30 +772,78 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   />
                 </div>
 
+                {/* Category & Free Shipping */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                      Categoria da Vitrine
+                    </label>
+                    <select
+                      value={manualCategoryId}
+                      onChange={(e) => setManualCategoryId(e.target.value)}
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 transition-colors"
+                    >
+                      {CATEGORIES_TREE.map(cat => (
+                        <option key={cat.id} value={cat.id}>{cat.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                      Opções de Destaque
+                    </label>
+                    <label className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={manualFreeShipping}
+                        onChange={(e) => setManualFreeShipping(e.target.checked)}
+                        className="w-4 h-4 accent-amber-400 rounded"
+                      />
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
+                        <Truck className="w-4 h-4 text-emerald-400" />
+                        <span>Destacar Frete Grátis</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
                 {/* Action Buttons */}
                 <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center gap-3">
                   <button
                     type="submit"
                     disabled={isSubmitting || !manualTitle || !manualPrice || !manualImageUrl || !manualAffiliateUrl}
-                    className="flex-1 py-3.5 px-6 rounded-2xl font-black text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-sm shadow-xl shadow-amber-400/20"
+                    className={`flex-1 py-3.5 px-6 rounded-2xl font-black text-slate-950 active:scale-98 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-sm shadow-xl ${
+                      editingProductId
+                        ? 'bg-sky-400 hover:bg-sky-300 shadow-sky-400/20'
+                        : 'bg-amber-400 hover:bg-amber-300 shadow-amber-400/20'
+                    }`}
                   >
                     {isSubmitting ? (
                       <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : editingProductId ? (
+                      <CheckCircle2 className="w-4 h-4" />
                     ) : (
-                      <PlusCircle className="w-4 h-4" />
+                      <Layers className="w-4 h-4" />
                     )}
-                    <span>{isSubmitting ? 'Salvando Oferta...' : 'Adicionar à Vitrine'}</span>
+                    <span>
+                      {isSubmitting 
+                        ? 'Processando...' 
+                        : editingProductId 
+                          ? 'Salvar Alterações na Vitrine' 
+                          : 'Salvar como Rascunho'}
+                    </span>
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={handleSaveAsDraft}
-                    disabled={isSubmitting || !manualTitle}
-                    className="py-3.5 px-5 rounded-2xl font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 active:scale-98 disabled:opacity-50 transition-all flex items-center gap-2 text-xs"
-                  >
-                    <Layers className="w-4 h-4 text-amber-400" />
-                    <span>Salvar Rascunho</span>
-                  </button>
+                  {editingProductId && (
+                    <button
+                      type="button"
+                      onClick={handleClearForm}
+                      className="py-3.5 px-5 rounded-2xl font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 active:scale-98 transition-all text-xs"
+                    >
+                      Cancelar
+                    </button>
+                  )}
                 </div>
               </form>
             </div>
@@ -755,16 +862,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
 
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 shadow-2xl">
+                  {/* Clean white frame for JPG/PNG product image */}
                   <div className="relative aspect-square rounded-xl bg-slate-900 overflow-hidden flex items-center justify-center p-2 border border-slate-800/80">
                     {manualImageUrl ? (
-                      <img
-                        src={manualImageUrl}
-                        alt="Preview"
-                        className="max-h-full max-w-full object-contain"
-                        onError={(e) => {
-                          (e.target as HTMLElement).style.display = 'none';
-                        }}
-                      />
+                      <div className="w-full h-full bg-white rounded-lg p-2 flex items-center justify-center shadow-sm">
+                        <img
+                          src={manualImageUrl}
+                          alt="Preview"
+                          className="max-h-full max-w-full object-contain"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      </div>
                     ) : (
                       <div className="text-center p-4 space-y-2 text-slate-600">
                         <ImageIcon className="w-10 h-10 mx-auto stroke-1" />
@@ -772,14 +882,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       </div>
                     )}
 
-                    <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/90 text-emerald-400 text-[10px] font-bold border border-emerald-800 flex items-center gap-1">
-                      <Truck className="w-3 h-3" />
-                      <span>Frete Grátis</span>
-                    </span>
+                    {manualFreeShipping && (
+                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/90 text-emerald-400 text-[10px] font-bold border border-emerald-800 flex items-center gap-1">
+                        <Truck className="w-3 h-3" />
+                        <span>Frete Grátis</span>
+                      </span>
+                    )}
 
-                    {parsedPrice > 0 && (
+                    {calculatedDiscount > 0 && (
                       <span className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black shadow-md">
-                        -15%
+                        -{calculatedDiscount}%
                       </span>
                     )}
                   </div>
@@ -794,11 +906,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                     <div className="pt-2 flex items-baseline gap-2">
                       <span className="text-lg font-black text-amber-400">
-                        R$ {parsedPrice > 0 ? parsedPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}
+                        R$ {currentParsedPrice > 0 ? currentParsedPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}
                       </span>
-                      {parsedPrice > 0 && (
+                      {currentParsedOriginalPrice > currentParsedPrice && (
                         <span className="text-xs text-slate-500 line-through">
-                          R$ {(parsedPrice * 1.15).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          R$ {currentParsedOriginalPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </span>
                       )}
                     </div>
@@ -816,17 +928,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         )}
 
-        {/* TAB 2: STAGING DRAFTS QUEUE */}
+        {/* TAB 2: STAGING DRAFTS QUEUE (WITH PUBLISH BUTTON) */}
         {activeTab === 'staging' && (
           <div className="space-y-6 animate-in fade-in duration-150">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 rounded-3xl bg-slate-900 border border-slate-800">
               <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/20 uppercase tracking-wider">
+                    Status: draft (Rascunho)
+                  </span>
+                </div>
                 <h3 className="text-lg font-black text-white flex items-center gap-2">
                   <Layers className="w-5 h-5 text-amber-400" />
-                  <span>Fila de Rascunhos (Staging)</span>
+                  <span>Fila de Rascunhos ({drafts.length})</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
-                  Itens salvos como rascunho para ajuste de preços, categoria e publicação posterior na vitrine.
+                  Todos os itens cadastrados entram aqui primeiro. Clique em <strong>Publicar</strong> para enviar à Vitrine Oficial.
                 </p>
               </div>
 
@@ -837,7 +954,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 transition-colors flex items-center gap-1.5"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${draftsLoading ? 'animate-spin' : ''}`} />
-                  <span>Atualizar Fila</span>
+                  <span>Atualizar</span>
                 </button>
               </div>
             </div>
@@ -847,14 +964,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <Layers className="w-10 h-10 text-slate-600 mx-auto" />
                 <h4 className="text-base font-bold text-white">Nenhum rascunho pendente</h4>
                 <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                  Cadastre novas ofertas na aba principal para publicá-las instantaneamente ou salvá-las como rascunho.
+                  Cadastre novas ofertas no formulário para enfileirá-las e publicá-las quando desejar.
                 </p>
                 <button
                   onClick={() => setActiveTab('create')}
                   className="px-5 py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs inline-flex items-center gap-2 shadow-lg shadow-amber-400/20 mt-2"
                 >
-                  <PlusCircle className="w-3.5 h-3.5" />
-                  <span>Cadastrar Nova Oferta</span>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Cadastrar Oferta</span>
                 </button>
               </div>
             ) : (
@@ -865,13 +982,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     className="p-6 rounded-3xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition-all space-y-4 shadow-xl"
                   >
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                      {/* Product Image */}
+                      {/* Product Image with White Container */}
                       <div className="lg:col-span-2 aspect-square rounded-2xl bg-slate-950 p-2 flex items-center justify-center border border-slate-800">
-                        <img
-                          src={draft.imageUrl}
-                          alt={draft.title}
-                          className="max-h-full max-w-full object-contain"
-                        />
+                        <div className="w-full h-full bg-white rounded-xl p-2 flex items-center justify-center shadow-sm">
+                          <img
+                            src={draft.imageUrl}
+                            alt={draft.title}
+                            className="max-h-full max-w-full object-contain"
+                          />
+                        </div>
                       </div>
 
                       {/* Product Details & Inputs */}
@@ -915,23 +1034,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                           <div>
                             <label className="block text-[11px] font-bold text-slate-400 mb-1">
-                              Preço Promocional (R$)
-                            </label>
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={draft.promotionalPrice}
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 0;
-                                handleUpdateDraftField(draft.id, 'promotionalPrice', val);
-                              }}
-                              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs font-bold text-amber-400 focus:outline-none focus:border-amber-400"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-400 mb-1">
-                              Preço Original / De (R$)
+                              Preço Original / "De" (R$)
                             </label>
                             <input
                               type="number"
@@ -940,8 +1043,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               onChange={(e) => {
                                 const val = parseFloat(e.target.value) || 0;
                                 handleUpdateDraftField(draft.id, 'originalPrice', val);
+                                const newDiscount = calcDiscountPercent(val, draft.promotionalPrice);
+                                handleUpdateDraftField(draft.id, 'discountPercent', newDiscount);
                               }}
                               className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-bold text-amber-400 mb-1 flex items-center justify-between">
+                              <span>Preço Promocional (R$)</span>
+                              {draft.discountPercent > 0 && (
+                                <span className="text-[10px] font-black text-emerald-400">-{draft.discountPercent}%</span>
+                              )}
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={draft.promotionalPrice}
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value) || 0;
+                                handleUpdateDraftField(draft.id, 'promotionalPrice', val);
+                                const newDiscount = calcDiscountPercent(draft.originalPrice, val);
+                                handleUpdateDraftField(draft.id, 'discountPercent', newDiscount);
+                              }}
+                              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-amber-500/40 text-xs font-bold text-amber-400 focus:outline-none focus:border-amber-400"
                             />
                           </div>
 
@@ -972,7 +1098,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               value={draft.affiliateUrl}
                               onChange={(e) => handleUpdateDraftField(draft.id, 'affiliateUrl', e.target.value)}
                               placeholder="Cole o link com seu ID de afiliado do Mercado Livre..."
-                              className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-amber-500/40 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-400"
+                              className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-amber-500/40 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 font-mono"
                             />
                             {draft.affiliateUrl && (
                               <a
@@ -989,14 +1115,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           </div>
                         </div>
 
-                        {/* Action Buttons */}
-                        <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
+                        {/* Action Buttons: Publish or Delete */}
+                        <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/80">
                           <button
                             onClick={() => handleDeleteDraft(draft.id)}
-                            className="px-3 py-2 rounded-xl bg-rose-950/40 hover:bg-rose-900 text-rose-300 border border-rose-800/60 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                            className="px-3.5 py-2 rounded-xl bg-rose-950/40 hover:bg-rose-900 text-rose-300 border border-rose-800/60 text-xs font-bold flex items-center gap-1.5 transition-colors"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
-                            <span>Remover da Fila</span>
+                            <span>Remover Rascunho</span>
                           </button>
 
                           <button
@@ -1004,7 +1130,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-98 text-slate-950 font-black text-xs flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20"
                           >
                             <UploadCloud className="w-4 h-4" />
-                            <span>Publicar na Vitrine Oficial</span>
+                            <span>Publicar na Vitrine</span>
                           </button>
                         </div>
                       </div>
@@ -1016,57 +1142,181 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         )}
 
-        {/* TAB 3: PUBLISHED PRODUCTS */}
+        {/* TAB 3: PUBLISHED PRODUCTS (MANAGEMENT TABLE WITH REMOVE & EDIT) */}
         {activeTab === 'published' && (
           <div className="space-y-6 animate-in fade-in duration-150">
-            <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 rounded-3xl bg-slate-900 border border-slate-800">
               <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-400/10 text-emerald-400 border border-emerald-400/20 uppercase tracking-wider">
+                    Status: published (Ativo)
+                  </span>
+                </div>
                 <h3 className="text-lg font-black text-white flex items-center gap-2">
                   <ShoppingBag className="w-5 h-5 text-emerald-400" />
-                  <span>Produtos Ativos na Vitrine</span>
+                  <span>Vitrine Publicada ({publishedProducts.length})</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
-                  Itens publicados via painel administrativo ou sincronizados com o Supabase.
+                  Gerencie todas as ofertas ao vivo. Clique em <strong>Editar</strong> para alterar dados ou <strong>Remover</strong> para excluir da vitrine.
                 </p>
               </div>
 
-              <button
-                onClick={onBackToVitrine}
-                className="px-4 py-2 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5"
-              >
-                <Eye className="w-3.5 h-3.5" />
-                <span>Visualizar na Vitrine</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {publishedProducts.map((prod) => (
-                <div
-                  key={prod.id}
-                  className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3"
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={loadDraftsAndProducts}
+                  disabled={draftsLoading}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 transition-colors flex items-center gap-1.5"
                 >
-                  <div className="flex items-center gap-3">
-                    <img
-                      src={prod.imageUrl}
-                      alt={prod.title}
-                      className="w-14 h-14 object-contain rounded-xl bg-slate-950 p-1 border border-slate-800"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-bold text-white truncate">{prod.title}</p>
-                      <p className="text-[11px] text-slate-400">{prod.categoryName}</p>
-                      <p className="text-sm font-black text-amber-400 mt-0.5">
-                        R$ {prod.minPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </p>
-                    </div>
-                  </div>
+                  <RefreshCw className={`w-3.5 h-3.5 ${draftsLoading ? 'animate-spin' : ''}`} />
+                  <span>Atualizar Lista</span>
+                </button>
 
-                  <div className="pt-2 border-t border-slate-800 text-[11px] flex items-center justify-between text-slate-400">
-                    <span>Loja: {prod.bestStore}</span>
-                    <span className="text-emerald-400 font-bold">● Ativo</span>
-                  </div>
-                </div>
-              ))}
+                <button
+                  onClick={onBackToVitrine}
+                  className="px-4 py-2 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-400/20"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>Ver Vitrine</span>
+                </button>
+              </div>
             </div>
+
+            {publishedProducts.length === 0 ? (
+              <div className="p-12 rounded-3xl bg-slate-900/60 border border-slate-800 text-center space-y-3">
+                <ShoppingBag className="w-10 h-10 text-slate-600 mx-auto" />
+                <h4 className="text-base font-bold text-white">Nenhum produto publicado</h4>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                  Acesse a Fila de Rascunhos para publicar suas ofertas cadastradas.
+                </p>
+                <button
+                  onClick={() => setActiveTab('create')}
+                  className="px-5 py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs inline-flex items-center gap-2 shadow-lg shadow-amber-400/20 mt-2"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Cadastrar Oferta</span>
+                </button>
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 uppercase tracking-wider font-extrabold text-[11px]">
+                        <th className="py-4 px-6">Produto</th>
+                        <th className="py-4 px-4">Categoria</th>
+                        <th className="py-4 px-4">Preço Promocional</th>
+                        <th className="py-4 px-4">Preço De / Desconto</th>
+                        <th className="py-4 px-4 text-center">Status</th>
+                        <th className="py-4 px-6 text-right">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {publishedProducts.map((prod) => {
+                        const primaryOffer = prod.offers?.[0];
+                        const origPrice = prod.maxPrice || primaryOffer?.originalPrice || 0;
+                        const disc = calcDiscountPercent(origPrice, prod.minPrice);
+
+                        return (
+                          <tr 
+                            key={prod.id} 
+                            className="hover:bg-slate-800/40 transition-colors"
+                          >
+                            {/* Product Info */}
+                            <td className="py-4 px-6">
+                              <div className="flex items-center gap-3.5 min-w-[240px] max-w-md">
+                                <div className="w-12 h-12 rounded-xl bg-white p-1.5 flex items-center justify-center shrink-0 shadow-sm border border-slate-700">
+                                  <img
+                                    src={prod.imageUrl}
+                                    alt={prod.title}
+                                    className="max-h-full max-w-full object-contain"
+                                    onError={(e) => {
+                                      (e.target as HTMLElement).style.display = 'none';
+                                    }}
+                                  />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="font-bold text-white truncate text-xs" title={prod.title}>
+                                    {prod.title}
+                                  </p>
+                                  <p className="text-[11px] text-slate-400 mt-0.5">
+                                    Loja: {prod.bestStore || 'Mercado Livre'}
+                                  </p>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Category */}
+                            <td className="py-4 px-4 text-slate-300 font-medium whitespace-nowrap">
+                              <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[11px]">
+                                {prod.categoryName || 'Geral'}
+                              </span>
+                            </td>
+
+                            {/* Promo Price */}
+                            <td className="py-4 px-4 whitespace-nowrap">
+                              <span className="font-black text-amber-400 text-sm">
+                                R$ {prod.minPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              </span>
+                            </td>
+
+                            {/* Original Price / Discount */}
+                            <td className="py-4 px-4 whitespace-nowrap">
+                              <div className="flex items-center gap-2">
+                                {origPrice > prod.minPrice ? (
+                                  <>
+                                    <span className="text-slate-500 line-through text-xs">
+                                      R$ {origPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                    </span>
+                                    {disc > 0 && (
+                                      <span className="px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-400 border border-emerald-800 text-[10px] font-black">
+                                        -{disc}%
+                                      </span>
+                                    )}
+                                  </>
+                                ) : (
+                                  <span className="text-slate-600 text-xs">-</span>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* Status */}
+                            <td className="py-4 px-4 text-center whitespace-nowrap">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 text-[10px] font-black">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                Published
+                              </span>
+                            </td>
+
+                            {/* Action Buttons: Edit & Remove */}
+                            <td className="py-4 px-6 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  onClick={() => handleEditPublishedProduct(prod)}
+                                  className="px-3 py-1.5 rounded-xl bg-sky-950/60 hover:bg-sky-900 text-sky-300 border border-sky-800 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+                                  title="Editar este produto"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                  <span>Editar</span>
+                                </button>
+
+                                <button
+                                  onClick={() => handleDeletePublishedProduct(prod.id)}
+                                  className="px-3 py-1.5 rounded-xl bg-rose-950/50 hover:bg-rose-900 text-rose-300 border border-rose-800/80 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+                                  title="Excluir produto da Vitrine"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Remover</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

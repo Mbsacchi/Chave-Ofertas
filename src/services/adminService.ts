@@ -347,10 +347,7 @@ export const publishDraftToVitrine = async (draft: DraftProduct): Promise<Produc
   return newProduct;
 };
 
-/**
- * Creates and publishes a product directly to the vitrine from the Manual Form
- */
-export const createAndPublishManualProduct = async (data: {
+export interface CreateManualProductInput {
   title: string;
   price: number;
   originalPrice?: number;
@@ -365,7 +362,12 @@ export const createAndPublishManualProduct = async (data: {
   storeName?: string;
   storeId?: StoreId;
   freeShipping?: boolean;
-}): Promise<Product> => {
+}
+
+/**
+ * Creates and publishes a product directly to the vitrine from the Manual Form
+ */
+export const createAndPublishManualProduct = async (data: CreateManualProductInput): Promise<Product> => {
   await requireAuthSession();
 
   if (!data.title.trim()) throw new Error('Por favor, informe o Título do Produto.');
@@ -549,4 +551,101 @@ export const fetchLiveDatabaseProducts = async (): Promise<Product[]> => {
   }
 
   return getStoredCustomProducts();
+};
+
+/**
+ * Deletes a published product from the live database and local cache
+ */
+export const deletePublishedProduct = async (productId: string): Promise<void> => {
+  await requireAuthSession();
+
+  if (isSupabaseConfigured) {
+    try {
+      const { error } = await supabase
+        .from('products')
+        .delete()
+        .eq('id', productId);
+      if (error) {
+        console.warn('Supabase delete product error:', error);
+      }
+    } catch (err) {
+      console.warn('Supabase delete product exception:', err);
+    }
+  }
+
+  const customProducts = getStoredCustomProducts();
+  const updated = customProducts.filter(p => p.id !== productId);
+  saveStoredCustomProducts(updated);
+};
+
+/**
+ * Updates an existing published product in the database and local cache
+ */
+export const updatePublishedProduct = async (productId: string, data: Partial<CreateManualProductInput>): Promise<Product> => {
+  await requireAuthSession();
+  const now = new Date().toISOString();
+  
+  const existingProducts = await fetchLiveDatabaseProducts();
+  const existing = existingProducts.find(p => p.id === productId);
+  if (!existing) {
+    throw new Error('Produto não encontrado na base de dados.');
+  }
+
+  const promotionalPrice = data.price !== undefined ? Number(data.price) : existing.minPrice;
+  const originalPrice = data.originalPrice !== undefined ? Number(data.originalPrice) : existing.maxPrice;
+  const discountPercent = originalPrice > promotionalPrice && promotionalPrice > 0
+    ? Math.round(((originalPrice - promotionalPrice) / originalPrice) * 100)
+    : 15;
+
+  const updatedOffers = existing.offers.map(off => ({
+    ...off,
+    price: promotionalPrice,
+    originalPrice: originalPrice,
+    discountPercent: discountPercent,
+    affiliateUrl: data.affiliateUrl ? data.affiliateUrl.trim() : off.affiliateUrl,
+    freeShipping: data.freeShipping !== undefined ? data.freeShipping : off.freeShipping,
+    lastUpdated: 'Agora',
+  }));
+
+  const updatedProduct: Product = {
+    ...existing,
+    title: data.title ? data.title.trim() : existing.title,
+    imageUrl: data.imageUrl ? data.imageUrl.trim() : existing.imageUrl,
+    categoryId: data.categoryId || existing.categoryId,
+    categoryName: data.categoryName || existing.categoryName,
+    subcategoryId: data.subcategoryId || existing.subcategoryId,
+    subcategoryName: data.subcategoryName || existing.subcategoryName,
+    minPrice: promotionalPrice,
+    maxPrice: originalPrice,
+    updatedAt: now,
+    offers: updatedOffers,
+  };
+
+  if (isSupabaseConfigured) {
+    try {
+      await supabase
+        .from('products')
+        .update({
+          title: updatedProduct.title,
+          image_url: updatedProduct.imageUrl,
+          category_id: updatedProduct.categoryId,
+          category_name: updatedProduct.categoryName,
+          subcategory_id: updatedProduct.subcategoryId,
+          subcategory_name: updatedProduct.subcategoryName,
+          min_price: updatedProduct.minPrice,
+          max_price: updatedProduct.maxPrice,
+          offers: updatedProduct.offers,
+          updated_at: now,
+        })
+        .eq('id', productId);
+    } catch (err) {
+      console.warn('Supabase update product error:', err);
+    }
+  }
+
+  const customProducts = getStoredCustomProducts();
+  const filtered = customProducts.filter(p => p.id !== productId);
+  saveStoredCustomProducts([updatedProduct, ...filtered]);
+
+  return updatedProduct;
 };
