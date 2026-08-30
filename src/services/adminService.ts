@@ -64,14 +64,16 @@ const requireAuthSession = async (): Promise<string> => {
 };
 
 /**
- * Searches the public Mercado Livre API for products in Brazil (MLB) via Vercel Serverless Function
+ * Searches the public Mercado Livre API directly on the client side
  */
 export const searchMercadoLivreAPI = async (query: string): Promise<MercadoLivreSearchResult[]> => {
   if (!query.trim()) return [];
   try {
-    const url = `/api/search?q=${encodeURIComponent(query.trim())}`;
+    const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query.trim())}`;
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`Erro na busca: status ${res.status}`);
+    if (!res.ok) {
+      throw new Error(`Erro na busca do Mercado Livre: status ${res.status}`);
+    }
     const data = await res.json();
     
     return (data.results || []).map((item: any) => ({
@@ -84,8 +86,8 @@ export const searchMercadoLivreAPI = async (query: string): Promise<MercadoLivre
       shipping: { free_shipping: Boolean(item.shipping?.free_shipping) },
       condition: item.condition || 'new',
     }));
-  } catch (err) {
-    console.error(err);
+  } catch (err: any) {
+    console.error('Erro ao buscar produtos no Mercado Livre:', err);
     throw err;
   }
 };
