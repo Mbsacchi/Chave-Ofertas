@@ -1,6 +1,6 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { DraftProduct, Product, StoreOffer, StoreId } from '../types';
-import { CATEGORIES_TREE } from '../data/mockData';
+import { DraftProduct, Product, StoreOffer, StoreId, PriceHistoryPoint } from '../types';
+import { MOCK_PRODUCTS } from '../data/mockData';
 
 // Local authenticated session cache for fallback when Supabase tables are initializing
 const LOCAL_DRAFTS_STORAGE_KEY = 'chave_ofertas_admin_drafts_v1';
@@ -52,7 +52,7 @@ const requireAuthSession = async (): Promise<string> => {
 };
 
 /**
- * Fetches all draft products in the staging queue
+ * Fetches all draft products in the staging queue (No restrictive user/source filters)
  */
 export const fetchDraftProducts = async (): Promise<DraftProduct[]> => {
   await requireAuthSession();
@@ -90,7 +90,7 @@ export const fetchDraftProducts = async (): Promise<DraftProduct[]> => {
         }));
       }
     } catch (err) {
-      console.warn('Supabase draft table query failed, falling back to secure local staging:', err);
+      console.warn('Supabase fetchDraftProducts error, using local cache:', err);
     }
   }
 
@@ -98,185 +98,234 @@ export const fetchDraftProducts = async (): Promise<DraftProduct[]> => {
 };
 
 /**
- * Adds a new product to the Draft Staging Queue
+ * Adds a new draft product to the staging queue (Status: draft)
  */
 export const addDraftProduct = async (
-  draftData: Omit<DraftProduct, 'id' | 'createdAt' | 'updatedAt' | 'status'>
+  draft: Omit<DraftProduct, 'id' | 'createdAt' | 'updatedAt' | 'status'>
 ): Promise<DraftProduct> => {
   await requireAuthSession();
 
-  const id = `draft-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-  const now = new Date().toISOString();
-  
   const newDraft: DraftProduct = {
-    ...draftData,
-    id,
+    ...draft,
+    id: `draft-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     status: 'draft',
-    createdAt: now,
-    updatedAt: now,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
 
   if (isSupabaseConfigured) {
     try {
-      const { error } = await supabase.from('draft_products').insert({
-        id: newDraft.id,
-        external_id: newDraft.externalId,
-        title: newDraft.title,
-        brand: newDraft.brand,
-        description: newDraft.description,
-        category_id: newDraft.categoryId,
-        category_name: newDraft.categoryName,
-        subcategory_id: newDraft.subcategoryId,
-        subcategory_name: newDraft.subcategoryName,
-        image_url: newDraft.imageUrl,
-        original_price: newDraft.originalPrice,
-        promotional_price: newDraft.promotionalPrice,
-        discount_percent: newDraft.discountPercent,
-        affiliate_url: newDraft.affiliateUrl,
-        store_id: newDraft.storeId,
-        store_name: newDraft.storeName,
-        free_shipping: newDraft.freeShipping,
-        installment: newDraft.installment,
-        status: newDraft.status,
-        created_at: newDraft.createdAt,
-        updated_at: newDraft.updatedAt,
-      });
+      const { data, error } = await supabase
+        .from('draft_products')
+        .insert({
+          id: newDraft.id,
+          external_id: newDraft.externalId,
+          title: newDraft.title,
+          brand: newDraft.brand,
+          description: newDraft.description,
+          category_id: newDraft.categoryId,
+          category_name: newDraft.categoryName,
+          subcategory_id: newDraft.subcategoryId,
+          subcategory_name: newDraft.subcategoryName,
+          image_url: newDraft.imageUrl,
+          original_price: newDraft.originalPrice,
+          promotional_price: newDraft.promotionalPrice,
+          discount_percent: newDraft.discountPercent,
+          affiliate_url: newDraft.affiliateUrl,
+          store_id: newDraft.storeId,
+          store_name: newDraft.storeName,
+          free_shipping: newDraft.freeShipping,
+          installment: newDraft.installment,
+          status: 'draft',
+        })
+        .select()
+        .single();
 
-      if (error) {
-        console.warn('Supabase insert draft warning:', error.message);
+      if (!error && data) {
+        return {
+          id: data.id,
+          externalId: data.external_id,
+          title: data.title,
+          brand: data.brand,
+          description: data.description,
+          categoryId: data.category_id,
+          categoryName: data.category_name,
+          subcategoryId: data.subcategory_id,
+          subcategoryName: data.subcategory_name,
+          imageUrl: data.image_url,
+          originalPrice: Number(data.original_price),
+          promotionalPrice: Number(data.promotional_price),
+          discountPercent: Number(data.discount_percent),
+          affiliateUrl: data.affiliate_url,
+          storeId: data.store_id,
+          storeName: data.store_name,
+          freeShipping: Boolean(data.free_shipping),
+          installment: data.installment,
+          status: 'draft',
+          createdAt: data.created_at,
+          updatedAt: data.updated_at,
+        };
       }
     } catch (err) {
-      console.warn('Supabase draft insertion exception, saving locally:', err);
+      console.warn('Supabase addDraftProduct error, saving locally:', err);
     }
   }
 
-  const drafts = getStoredDrafts();
-  saveStoredDrafts([newDraft, ...drafts]);
+  const existing = getStoredDrafts();
+  saveStoredDrafts([newDraft, ...existing]);
   return newDraft;
 };
 
 /**
- * Updates an existing draft product in staging
+ * Updates an existing draft product
  */
 export const updateDraftProduct = async (
   id: string,
-  patch: Partial<DraftProduct>
+  updates: Partial<DraftProduct>
 ): Promise<DraftProduct> => {
   await requireAuthSession();
-  const now = new Date().toISOString();
 
   if (isSupabaseConfigured) {
     try {
-      const dbPayload: any = { updated_at: now };
-      if (patch.title !== undefined) dbPayload.title = patch.title;
-      if (patch.brand !== undefined) dbPayload.brand = patch.brand;
-      if (patch.description !== undefined) dbPayload.description = patch.description;
-      if (patch.categoryId !== undefined) dbPayload.category_id = patch.categoryId;
-      if (patch.categoryName !== undefined) dbPayload.category_name = patch.categoryName;
-      if (patch.subcategoryId !== undefined) dbPayload.subcategory_id = patch.subcategoryId;
-      if (patch.subcategoryName !== undefined) dbPayload.subcategory_name = patch.subcategoryName;
-      if (patch.imageUrl !== undefined) dbPayload.image_url = patch.imageUrl;
-      if (patch.originalPrice !== undefined) dbPayload.original_price = patch.originalPrice;
-      if (patch.promotionalPrice !== undefined) dbPayload.promotional_price = patch.promotionalPrice;
-      if (patch.discountPercent !== undefined) dbPayload.discount_percent = patch.discountPercent;
-      if (patch.affiliateUrl !== undefined) dbPayload.affiliate_url = patch.affiliateUrl;
-      if (patch.storeId !== undefined) dbPayload.store_id = patch.storeId;
-      if (patch.storeName !== undefined) dbPayload.store_name = patch.storeName;
-      if (patch.freeShipping !== undefined) dbPayload.free_shipping = patch.freeShipping;
-      if (patch.installment !== undefined) dbPayload.installment = patch.installment;
+      const payload: any = { updated_at: new Date().toISOString() };
+      if (updates.title !== undefined) payload.title = updates.title;
+      if (updates.brand !== undefined) payload.brand = updates.brand;
+      if (updates.description !== undefined) payload.description = updates.description;
+      if (updates.categoryId !== undefined) payload.category_id = updates.categoryId;
+      if (updates.categoryName !== undefined) payload.category_name = updates.categoryName;
+      if (updates.subcategoryId !== undefined) payload.subcategory_id = updates.subcategoryId;
+      if (updates.subcategoryName !== undefined) payload.subcategory_name = updates.subcategoryName;
+      if (updates.imageUrl !== undefined) payload.image_url = updates.imageUrl;
+      if (updates.originalPrice !== undefined) payload.original_price = updates.originalPrice;
+      if (updates.promotionalPrice !== undefined) payload.promotional_price = updates.promotionalPrice;
+      if (updates.discountPercent !== undefined) payload.discount_percent = updates.discountPercent;
+      if (updates.affiliateUrl !== undefined) payload.affiliate_url = updates.affiliateUrl;
+      if (updates.storeId !== undefined) payload.store_id = updates.storeId;
+      if (updates.storeName !== undefined) payload.store_name = updates.storeName;
+      if (updates.freeShipping !== undefined) payload.free_shipping = updates.freeShipping;
+      if (updates.installment !== undefined) payload.installment = updates.installment;
+      if (updates.status !== undefined) payload.status = updates.status;
 
-      await supabase.from('draft_products').update(dbPayload).eq('id', id);
+      const { data, error } = await supabase
+        .from('draft_products')
+        .update(payload)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (!error && data) {
+        return {
+          id: data.id,
+          externalId: data.external_id,
+          title: data.title,
+          brand: data.brand,
+          description: data.description,
+          categoryId: data.category_id,
+          categoryName: data.category_name,
+          subcategoryId: data.subcategory_id,
+          subcategoryName: data.subcategory_name,
+          imageUrl: data.image_url,
+          originalPrice: Number(data.original_price),
+          promotionalPrice: Number(data.promotional_price),
+          discountPercent: Number(data.discount_percent),
+          affiliateUrl: data.affiliate_url,
+          storeId: data.store_id,
+          storeName: data.store_name,
+          freeShipping: Boolean(data.free_shipping),
+          installment: data.installment,
+          status: data.status,
+          createdAt: data.created_at,
+          updatedAt: data.updated_at,
+        };
+      }
     } catch (err) {
-      console.warn('Supabase update draft exception:', err);
+      console.warn('Supabase updateDraftProduct error, updating locally:', err);
     }
   }
 
-  const drafts = getStoredDrafts();
-  const updated = drafts.map(d => (d.id === id ? { ...d, ...patch, updatedAt: now } : d));
-  saveStoredDrafts(updated);
+  const existing = getStoredDrafts();
+  const index = existing.findIndex((d) => d.id === id);
+  if (index === -1) {
+    throw new Error('Rascunho não encontrado.');
+  }
 
-  const target = updated.find(d => d.id === id);
-  if (!target) throw new Error('Rascunho não encontrado.');
-  return target;
+  const updated: DraftProduct = {
+    ...existing[index],
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+
+  existing[index] = updated;
+  saveStoredDrafts(existing);
+  return updated;
 };
 
 /**
- * Deletes a draft product from staging
+ * Deletes a draft product from the staging queue
  */
 export const deleteDraftProduct = async (id: string): Promise<void> => {
   await requireAuthSession();
 
   if (isSupabaseConfigured) {
     try {
-      await supabase.from('draft_products').delete().eq('id', id);
+      const { error } = await supabase.from('draft_products').delete().eq('id', id);
+      if (error) console.warn('Supabase delete error:', error);
     } catch (err) {
-      console.warn('Supabase delete draft exception:', err);
+      console.warn('Supabase deleteDraftProduct error:', err);
     }
   }
 
-  const drafts = getStoredDrafts();
-  saveStoredDrafts(drafts.filter(d => d.id !== id));
+  const existing = getStoredDrafts();
+  saveStoredDrafts(existing.filter((d) => d.id !== id));
 };
 
 /**
- * Publishes a draft product directly to the live vitrine
+ * Publishes a draft product to the live Product table/Vitrine (Status: published)
  */
 export const publishDraftToVitrine = async (draft: DraftProduct): Promise<Product> => {
   await requireAuthSession();
 
-  if (!draft.affiliateUrl || !draft.affiliateUrl.trim()) {
-    throw new Error('Por favor, informe o Link de Afiliado antes de publicar o produto.');
-  }
-
-  const slug = draft.title
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\w\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/--+/g, '-')
-    .trim();
-
-  const productId = `prod-${Date.now()}-${slug.slice(0, 30)}`;
-  const now = new Date().toISOString();
-
   const primaryOffer: StoreOffer = {
-    id: `off-${draft.storeId}-${Date.now()}`,
-    storeId: draft.storeId,
-    storeName: draft.storeName,
-    storeLogo: draft.storeId === 'mercadolivre' 
-      ? 'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=100&auto=format&fit=crop&q=80'
-      : 'https://images.unsplash.com/photo-1523474253243-283a0ed81406?w=100&auto=format&fit=crop&q=80',
+    id: `offer-${Date.now()}-1`,
+    storeId: draft.storeId || 'mercadolivre',
+    storeName: draft.storeName || 'Mercado Livre',
+    storeLogo: `https://images.unsplash.com/photo-1557821552-17105176677c?w=100&auto=format&fit=crop&q=80`,
     price: draft.promotionalPrice,
-    originalPrice: draft.originalPrice || draft.promotionalPrice,
-    discountPercent: draft.discountPercent || 0,
+    originalPrice: draft.originalPrice,
+    discountPercent: draft.discountPercent,
     currency: 'BRL',
     affiliateUrl: draft.affiliateUrl,
     inStock: true,
     freeShipping: draft.freeShipping,
-    installment: draft.installment || 'À vista',
+    installment: draft.installment || '10x sem juros',
     rating: 4.8,
-    reviewsCount: 150,
-    lastUpdated: 'Agora',
+    reviewsCount: 120,
+    lastUpdated: new Date().toISOString(),
+  };
+
+  const historyPoint: PriceHistoryPoint = {
+    date: new Date().toISOString().split('T')[0],
+    timestamp: Date.now(),
+    minPrice: draft.promotionalPrice,
   };
 
   const newProduct: Product = {
-    id: productId,
+    id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     title: draft.title,
-    slug,
-    description: draft.description || `${draft.title} com o melhor preço e oferta verificada pelo Chave Ofertas.`,
+    slug: draft.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+    description: draft.description || `${draft.title} com as melhores condições e garantia oficial.`,
     categoryId: draft.categoryId,
     categoryName: draft.categoryName,
     subcategoryId: draft.subcategoryId,
     subcategoryName: draft.subcategoryName,
-    brand: draft.brand || 'Geral',
+    brand: draft.brand || draft.storeName || 'Geral',
     sku: draft.externalId || `SKU-${Date.now()}`,
     imageUrl: draft.imageUrl,
     searchKeywords: [
-      ...draft.title.toLowerCase().split(/\s+/),
-      draft.brand?.toLowerCase() || '',
-      draft.categoryName?.toLowerCase() || '',
-    ].filter(Boolean),
+      ...draft.title.toLowerCase().split(' ').filter(w => w.length > 2),
+      draft.categoryName.toLowerCase(),
+      draft.storeName.toLowerCase(),
+    ],
     minPrice: draft.promotionalPrice,
     maxPrice: draft.originalPrice || draft.promotionalPrice,
     historicalLowestPrice: draft.promotionalPrice,
@@ -286,17 +335,10 @@ export const publishDraftToVitrine = async (draft: DraftProduct): Promise<Produc
     reviewsCount: 120,
     isVerified: true,
     isActive: true,
-    createdAt: now,
-    updatedAt: now,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     offers: [primaryOffer],
-    priceHistory: [
-      { date: 'Mar', timestamp: 1711929600000, minPrice: Math.round(draft.promotionalPrice * 1.15) },
-      { date: 'Abr', timestamp: 1714521600000, minPrice: Math.round(draft.promotionalPrice * 1.10) },
-      { date: 'Mai', timestamp: 1717200000000, minPrice: Math.round(draft.promotionalPrice * 1.05) },
-      { date: 'Jun', timestamp: 1719792000000, minPrice: Math.round(draft.promotionalPrice * 1.02) },
-      { date: 'Jul', timestamp: 1722470400000, minPrice: Math.round(draft.promotionalPrice * 1.01) },
-      { date: 'Ago (Hoje)', timestamp: 1724889600000, minPrice: draft.promotionalPrice },
-    ],
+    priceHistory: [historyPoint],
   };
 
   if (isSupabaseConfigured) {
@@ -322,17 +364,14 @@ export const publishDraftToVitrine = async (draft: DraftProduct): Promise<Produc
         rating: newProduct.rating,
         reviews_count: newProduct.reviewsCount,
         is_verified: newProduct.isVerified,
-        is_active: newProduct.isActive,
+        is_active: true,
         offers: newProduct.offers,
         price_history: newProduct.priceHistory,
-        created_at: newProduct.createdAt,
-        updated_at: newProduct.updatedAt,
       });
 
-      // Remove from drafts in DB
       await supabase.from('draft_products').delete().eq('id', draft.id);
     } catch (err) {
-      console.warn('Supabase publish exception:', err);
+      console.warn('Supabase publishDraftToVitrine error, saving locally:', err);
     }
   }
 
@@ -340,127 +379,103 @@ export const publishDraftToVitrine = async (draft: DraftProduct): Promise<Produc
   const customProducts = getStoredCustomProducts();
   saveStoredCustomProducts([newProduct, ...customProducts]);
 
-  // Remove from local drafts
-  const drafts = getStoredDrafts();
-  saveStoredDrafts(drafts.filter(d => d.id !== draft.id));
+  // Remove draft from local drafts
+  const localDrafts = getStoredDrafts();
+  saveStoredDrafts(localDrafts.filter(d => d.id !== draft.id));
 
   return newProduct;
 };
 
+/**
+ * Interface for direct product creation from manual admin form
+ */
 export interface CreateManualProductInput {
   title: string;
   price: number;
-  originalPrice?: number;
+  originalPrice: number;
   imageUrl: string;
   affiliateUrl: string;
-  brand?: string;
-  description?: string;
-  categoryId?: string;
-  categoryName?: string;
+  storeName: string;
+  categoryId: string;
+  categoryName: string;
   subcategoryId?: string;
   subcategoryName?: string;
-  storeName?: string;
-  storeId?: StoreId;
-  freeShipping?: boolean;
+  freeShipping: boolean;
 }
 
 /**
- * Creates and publishes a product directly to the vitrine from the Manual Form
+ * Creates and publishes a product directly from the manual form
  */
-export const createAndPublishManualProduct = async (data: CreateManualProductInput): Promise<Product> => {
+export const createAndPublishManualProduct = async (
+  input: CreateManualProductInput
+): Promise<Product> => {
   await requireAuthSession();
 
-  if (!data.title.trim()) throw new Error('Por favor, informe o Título do Produto.');
-  if (!data.price || data.price <= 0) throw new Error('Por favor, informe um Preço válido.');
-  if (!data.imageUrl.trim()) throw new Error('Por favor, informe a URL da Imagem.');
-  if (!data.affiliateUrl.trim()) throw new Error('Por favor, informe o Link de Afiliado.');
+  const rawStore = input.storeName.toLowerCase().replace(/\s+/g, '');
+  let storeId: StoreId = 'mercadolivre';
+  if (rawStore.includes('amazon')) storeId = 'amazon';
+  else if (rawStore.includes('shopee')) storeId = 'shopee';
+  else if (rawStore.includes('magalu') || rawStore.includes('magazine')) storeId = 'magalu';
+  else if (rawStore.includes('kabum')) storeId = 'kabum';
 
-  const defaultCategory = CATEGORIES_TREE[0];
-  const defaultSubcategory = defaultCategory?.subcategories?.[0];
-
-  const categoryId = data.categoryId || defaultCategory?.id || 'eletronicos';
-  const categoryName = data.categoryName || defaultCategory?.name || 'Eletrônicos';
-  const subcategoryId = data.subcategoryId || defaultSubcategory?.id;
-  const subcategoryName = data.subcategoryName || defaultSubcategory?.name;
-
-  const promotionalPrice = Number(data.price);
-  const originalPrice = data.originalPrice && data.originalPrice > promotionalPrice 
-    ? Number(data.originalPrice) 
-    : Math.round(promotionalPrice * 1.15);
-  const discountPercent = Math.max(5, Math.round(((originalPrice - promotionalPrice) / originalPrice) * 100));
-
-  const slug = data.title
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\w\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/--+/g, '-')
-    .trim();
-
-  const productId = `prod-${Date.now()}-${slug.slice(0, 30)}`;
-  const now = new Date().toISOString();
-  const storeId: StoreId = data.storeId || 'mercadolivre';
-  const storeName = data.storeName || 'Mercado Livre';
+  const discountPercent = input.originalPrice > input.price
+    ? Math.round(((input.originalPrice - input.price) / input.originalPrice) * 100)
+    : 0;
 
   const primaryOffer: StoreOffer = {
-    id: `off-${storeId}-${Date.now()}`,
+    id: `offer-${Date.now()}-1`,
     storeId,
-    storeName,
-    storeLogo: storeId === 'mercadolivre' 
-      ? 'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=100&auto=format&fit=crop&q=80'
-      : 'https://images.unsplash.com/photo-1523474253243-283a0ed81406?w=100&auto=format&fit=crop&q=80',
-    price: promotionalPrice,
-    originalPrice,
+    storeName: input.storeName,
+    storeLogo: 'https://images.unsplash.com/photo-1557821552-17105176677c?w=100&auto=format&fit=crop&q=80',
+    price: input.price,
+    originalPrice: input.originalPrice,
     discountPercent,
     currency: 'BRL',
-    affiliateUrl: data.affiliateUrl.trim(),
+    affiliateUrl: input.affiliateUrl,
     inStock: true,
-    freeShipping: data.freeShipping ?? true,
+    freeShipping: input.freeShipping,
     installment: '10x sem juros',
     rating: 4.9,
     reviewsCount: 150,
-    lastUpdated: 'Agora',
+    lastUpdated: new Date().toISOString(),
+  };
+
+  const historyPoint: PriceHistoryPoint = {
+    date: new Date().toISOString().split('T')[0],
+    timestamp: Date.now(),
+    minPrice: input.price,
   };
 
   const newProduct: Product = {
-    id: productId,
-    title: data.title.trim(),
-    slug,
-    description: data.description || `${data.title.trim()} com preço verificado, garantia e envio rápido no Mercado Livre.`,
-    categoryId,
-    categoryName,
-    subcategoryId,
-    subcategoryName,
-    brand: data.brand?.trim() || 'Mercado Livre',
+    id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    title: input.title,
+    slug: input.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+    description: `${input.title} com garantia oficial e melhores condições na loja ${input.storeName}.`,
+    categoryId: input.categoryId,
+    categoryName: input.categoryName,
+    subcategoryId: input.subcategoryId,
+    subcategoryName: input.subcategoryName,
+    brand: input.storeName || 'Geral',
     sku: `SKU-${Date.now()}`,
-    imageUrl: data.imageUrl.trim(),
+    imageUrl: input.imageUrl,
     searchKeywords: [
-      ...data.title.toLowerCase().split(/\s+/),
-      'mercado livre',
-      'promocao',
-      'oferta'
-    ].filter(Boolean),
-    minPrice: promotionalPrice,
-    maxPrice: originalPrice,
-    historicalLowestPrice: promotionalPrice,
-    bestStore: storeName,
+      ...input.title.toLowerCase().split(' ').filter(w => w.length > 2),
+      input.categoryName.toLowerCase(),
+      input.storeName.toLowerCase(),
+    ],
+    minPrice: input.price,
+    maxPrice: input.originalPrice || input.price,
+    historicalLowestPrice: input.price,
+    bestStore: input.storeName,
     bestStoreId: storeId,
     rating: 4.9,
-    reviewsCount: 120,
+    reviewsCount: 150,
     isVerified: true,
     isActive: true,
-    createdAt: now,
-    updatedAt: now,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     offers: [primaryOffer],
-    priceHistory: [
-      { date: 'Mar', timestamp: 1711929600000, minPrice: Math.round(promotionalPrice * 1.15) },
-      { date: 'Abr', timestamp: 1714521600000, minPrice: Math.round(promotionalPrice * 1.10) },
-      { date: 'Mai', timestamp: 1717200000000, minPrice: Math.round(promotionalPrice * 1.05) },
-      { date: 'Jun', timestamp: 1719792000000, minPrice: Math.round(promotionalPrice * 1.02) },
-      { date: 'Jul', timestamp: 1722470400000, minPrice: Math.round(promotionalPrice * 1.01) },
-      { date: 'Ago (Hoje)', timestamp: 1724889600000, minPrice: promotionalPrice },
-    ],
+    priceHistory: [historyPoint],
   };
 
   if (isSupabaseConfigured) {
@@ -486,14 +501,12 @@ export const createAndPublishManualProduct = async (data: CreateManualProductInp
         rating: newProduct.rating,
         reviews_count: newProduct.reviewsCount,
         is_verified: newProduct.isVerified,
-        is_active: newProduct.isActive,
+        is_active: true,
         offers: newProduct.offers,
         price_history: newProduct.priceHistory,
-        created_at: newProduct.createdAt,
-        updated_at: newProduct.updatedAt,
       });
     } catch (err) {
-      console.warn('Supabase insert direct manual product exception:', err);
+      console.warn('Supabase createAndPublishManualProduct error, saving locally:', err);
     }
   }
 
@@ -505,19 +518,23 @@ export const createAndPublishManualProduct = async (data: CreateManualProductInp
 };
 
 /**
- * Fetches all custom published products from Supabase/Storage
+ * Fetches the complete, unrestricted global catalog of products.
+ * Includes all products from Supabase (manual, AI integrations, Awin network, etc.)
+ * combined with the base catalog, with zero user/source filtering.
  */
-export const fetchLiveDatabaseProducts = async (): Promise<Product[]> => {
+export const fetchAllGlobalProducts = async (): Promise<Product[]> => {
+  let dbProducts: Product[] = [];
+
   if (isSupabaseConfigured) {
     try {
+      // Clean query with NO user_id, author, created_by or source filters
       const { data, error } = await supabase
         .from('products')
         .select('*')
-        .eq('is_active', true)
         .order('created_at', { ascending: false });
 
       if (!error && data && data.length > 0) {
-        return data.map((p: any) => ({
+        dbProducts = data.map((p: any) => ({
           id: p.id,
           title: p.title,
           slug: p.slug,
@@ -538,7 +555,7 @@ export const fetchLiveDatabaseProducts = async (): Promise<Product[]> => {
           rating: Number(p.rating) || 4.8,
           reviewsCount: Number(p.reviews_count) || 100,
           isVerified: Boolean(p.is_verified),
-          isActive: Boolean(p.is_active),
+          isActive: p.is_active !== undefined ? Boolean(p.is_active) : true,
           createdAt: p.created_at,
           updatedAt: p.updated_at,
           offers: p.offers || [],
@@ -546,11 +563,39 @@ export const fetchLiveDatabaseProducts = async (): Promise<Product[]> => {
         }));
       }
     } catch (err) {
-      console.warn('Supabase fetchLiveDatabaseProducts error:', err);
+      console.warn('Supabase fetchAllGlobalProducts error:', err);
     }
   }
 
-  return getStoredCustomProducts();
+  // Combine DB products with local custom storage
+  const localCustom = getStoredCustomProducts();
+  const combinedMap = new Map<string, Product>();
+
+  // 1. Add DB products first
+  dbProducts.forEach(p => combinedMap.set(p.id, p));
+
+  // 2. Add local custom products
+  localCustom.forEach(p => {
+    if (!combinedMap.has(p.id)) {
+      combinedMap.set(p.id, p);
+    }
+  });
+
+  // 3. Add catalog mock products so all site items are visible in admin autocomplete & comparator table
+  MOCK_PRODUCTS.forEach(p => {
+    if (!combinedMap.has(p.id)) {
+      combinedMap.set(p.id, p);
+    }
+  });
+
+  return Array.from(combinedMap.values());
+};
+
+/**
+ * Fetches all custom published products from Supabase/Storage
+ */
+export const fetchLiveDatabaseProducts = async (): Promise<Product[]> => {
+  return fetchAllGlobalProducts();
 };
 
 /**
@@ -569,56 +614,85 @@ export const deletePublishedProduct = async (productId: string): Promise<void> =
         console.warn('Supabase delete product error:', error);
       }
     } catch (err) {
-      console.warn('Supabase delete product exception:', err);
+      console.warn('Supabase deletePublishedProduct error:', err);
     }
   }
 
-  const customProducts = getStoredCustomProducts();
-  const updated = customProducts.filter(p => p.id !== productId);
-  saveStoredCustomProducts(updated);
+  const custom = getStoredCustomProducts();
+  saveStoredCustomProducts(custom.filter((p) => p.id !== productId));
 };
 
 /**
- * Updates an existing published product in the database and local cache
+ * Updates a published product in the live database and local cache
  */
-export const updatePublishedProduct = async (productId: string, data: Partial<CreateManualProductInput>): Promise<Product> => {
+export const updatePublishedProduct = async (
+  productId: string,
+  updates: Partial<CreateManualProductInput>
+): Promise<Product> => {
   await requireAuthSession();
-  const now = new Date().toISOString();
-  
-  const existingProducts = await fetchLiveDatabaseProducts();
-  const existing = existingProducts.find(p => p.id === productId);
-  if (!existing) {
+
+  const existingProducts = await fetchAllGlobalProducts();
+  const targetProduct = existingProducts.find((p) => p.id === productId);
+
+  if (!targetProduct) {
     throw new Error('Produto não encontrado na base de dados.');
   }
 
-  const promotionalPrice = data.price !== undefined ? Number(data.price) : existing.minPrice;
-  const originalPrice = data.originalPrice !== undefined ? Number(data.originalPrice) : existing.maxPrice;
-  const discountPercent = originalPrice > promotionalPrice && promotionalPrice > 0
-    ? Math.round(((originalPrice - promotionalPrice) / originalPrice) * 100)
-    : 15;
+  const updatedPrice = updates.price !== undefined ? updates.price : targetProduct.minPrice;
+  const updatedOriginalPrice = updates.originalPrice !== undefined ? updates.originalPrice : targetProduct.maxPrice;
+  const discountPercent = updatedOriginalPrice > updatedPrice
+    ? Math.round(((updatedOriginalPrice - updatedPrice) / updatedOriginalPrice) * 100)
+    : 0;
 
-  const updatedOffers = existing.offers.map(off => ({
-    ...off,
-    price: promotionalPrice,
-    originalPrice: originalPrice,
-    discountPercent: discountPercent,
-    affiliateUrl: data.affiliateUrl ? data.affiliateUrl.trim() : off.affiliateUrl,
-    freeShipping: data.freeShipping !== undefined ? data.freeShipping : off.freeShipping,
-    lastUpdated: 'Agora',
-  }));
+  // Update primary offer or push updated offer
+  const updatedOffers: StoreOffer[] = targetProduct.offers && targetProduct.offers.length > 0
+    ? targetProduct.offers.map((offer, idx) => {
+        if (idx === 0) {
+          return {
+            ...offer,
+            price: updatedPrice,
+            originalPrice: updatedOriginalPrice,
+            discountPercent,
+            currency: 'BRL',
+            affiliateUrl: updates.affiliateUrl || offer.affiliateUrl,
+            storeName: updates.storeName || offer.storeName,
+            freeShipping: updates.freeShipping !== undefined ? updates.freeShipping : offer.freeShipping,
+            lastUpdated: new Date().toISOString(),
+          };
+        }
+        return offer;
+      })
+    : [{
+        id: `offer-${Date.now()}-1`,
+        storeId: 'mercadolivre' as StoreId,
+        storeName: updates.storeName || targetProduct.bestStore || 'Mercado Livre',
+        storeLogo: 'https://images.unsplash.com/photo-1557821552-17105176677c?w=100&auto=format&fit=crop&q=80',
+        price: updatedPrice,
+        originalPrice: updatedOriginalPrice,
+        discountPercent,
+        currency: 'BRL',
+        affiliateUrl: updates.affiliateUrl || '#',
+        inStock: true,
+        freeShipping: updates.freeShipping ?? true,
+        installment: '10x sem juros',
+        rating: 4.8,
+        reviewsCount: 100,
+        lastUpdated: new Date().toISOString(),
+      }];
 
   const updatedProduct: Product = {
-    ...existing,
-    title: data.title ? data.title.trim() : existing.title,
-    imageUrl: data.imageUrl ? data.imageUrl.trim() : existing.imageUrl,
-    categoryId: data.categoryId || existing.categoryId,
-    categoryName: data.categoryName || existing.categoryName,
-    subcategoryId: data.subcategoryId || existing.subcategoryId,
-    subcategoryName: data.subcategoryName || existing.subcategoryName,
-    minPrice: promotionalPrice,
-    maxPrice: originalPrice,
-    updatedAt: now,
+    ...targetProduct,
+    title: updates.title || targetProduct.title,
+    imageUrl: updates.imageUrl || targetProduct.imageUrl,
+    categoryId: updates.categoryId || targetProduct.categoryId,
+    categoryName: updates.categoryName || targetProduct.categoryName,
+    subcategoryId: updates.subcategoryId || targetProduct.subcategoryId,
+    subcategoryName: updates.subcategoryName || targetProduct.subcategoryName,
+    bestStore: updates.storeName || targetProduct.bestStore,
+    minPrice: updatedPrice,
+    maxPrice: updatedOriginalPrice,
     offers: updatedOffers,
+    updatedAt: new Date().toISOString(),
   };
 
   if (isSupabaseConfigured) {
@@ -632,101 +706,116 @@ export const updatePublishedProduct = async (productId: string, data: Partial<Cr
           category_name: updatedProduct.categoryName,
           subcategory_id: updatedProduct.subcategoryId,
           subcategory_name: updatedProduct.subcategoryName,
+          best_store: updatedProduct.bestStore,
           min_price: updatedProduct.minPrice,
           max_price: updatedProduct.maxPrice,
           offers: updatedProduct.offers,
-          updated_at: now,
+          updated_at: updatedProduct.updatedAt,
         })
         .eq('id', productId);
     } catch (err) {
-      console.warn('Supabase update product error:', err);
+      console.warn('Supabase updatePublishedProduct error:', err);
     }
   }
 
-  const customProducts = getStoredCustomProducts();
-  const filtered = customProducts.filter(p => p.id !== productId);
-  saveStoredCustomProducts([updatedProduct, ...filtered]);
+  // Update local storage
+  const custom = getStoredCustomProducts();
+  const idx = custom.findIndex((p) => p.id === productId);
+  if (idx !== -1) {
+    custom[idx] = updatedProduct;
+    saveStoredCustomProducts(custom);
+  } else {
+    saveStoredCustomProducts([updatedProduct, ...custom]);
+  }
 
   return updatedProduct;
 };
 
-export interface AddOfferInput {
+/**
+ * Interface to add an offer from another store to an existing product (Comparator feature)
+ */
+export interface AddStoreOfferInput {
   productId: string;
   storeName: string;
-  storeId?: StoreId;
   price: number;
-  originalPrice?: number;
+  originalPrice: number;
   affiliateUrl: string;
-  freeShipping?: boolean;
+  freeShipping: boolean;
 }
 
 /**
- * Adds or updates a store offer for an existing product (Comparator architecture)
+ * Pushes a new store offer to an existing product in the price comparator
  */
-export const addOfferToExistingProduct = async (data: AddOfferInput): Promise<Product> => {
+export const addOfferToExistingProduct = async (
+  input: AddStoreOfferInput
+): Promise<Product> => {
   await requireAuthSession();
-  const now = new Date().toISOString();
-  
-  const existingProducts = await fetchLiveDatabaseProducts();
-  const product = existingProducts.find(p => p.id === data.productId);
-  if (!product) {
+
+  const existingProducts = await fetchAllGlobalProducts();
+  const targetProduct = existingProducts.find((p) => p.id === input.productId);
+
+  if (!targetProduct) {
     throw new Error('Produto selecionado não encontrado na base de dados.');
   }
 
-  const storeName = data.storeName.trim() || 'Mercado Livre';
-  const rawId = storeName.toLowerCase().replace(/\s+/g, '');
+  const rawStore = input.storeName.toLowerCase().replace(/\s+/g, '');
   let storeId: StoreId = 'mercadolivre';
-  if (rawId.includes('amazon')) storeId = 'amazon';
-  else if (rawId.includes('shopee')) storeId = 'shopee';
-  else if (rawId.includes('magalu') || rawId.includes('magazine')) storeId = 'magalu';
-  else if (rawId.includes('kabum')) storeId = 'kabum';
-  else if (rawId.includes('mercado') || rawId.includes('ml')) storeId = 'mercadolivre';
+  if (rawStore.includes('amazon')) storeId = 'amazon';
+  else if (rawStore.includes('shopee')) storeId = 'shopee';
+  else if (rawStore.includes('magalu') || rawStore.includes('magazine')) storeId = 'magalu';
+  else if (rawStore.includes('kabum')) storeId = 'kabum';
 
-  const promoPrice = Number(data.price);
-  const origPrice = data.originalPrice && data.originalPrice > promoPrice 
-    ? Number(data.originalPrice) 
-    : Math.round(promoPrice * 1.15);
-  const discountPercent = Math.max(5, Math.round(((origPrice - promoPrice) / origPrice) * 100));
+  const discountPercent = input.originalPrice > input.price
+    ? Math.round(((input.originalPrice - input.price) / input.originalPrice) * 100)
+    : 0;
 
   const newOffer: StoreOffer = {
-    id: `off-${storeId}-${Date.now()}`,
+    id: `offer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     storeId,
-    storeName,
-    storeLogo: storeId === 'mercadolivre' 
-      ? 'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=100&auto=format&fit=crop&q=80'
-      : storeId === 'amazon'
-      ? 'https://images.unsplash.com/photo-1523474253243-283a0ed81406?w=100&auto=format&fit=crop&q=80'
-      : 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=100&auto=format&fit=crop&q=80',
-    price: promoPrice,
-    originalPrice: origPrice,
+    storeName: input.storeName,
+    storeLogo: 'https://images.unsplash.com/photo-1557821552-17105176677c?w=100&auto=format&fit=crop&q=80',
+    price: input.price,
+    originalPrice: input.originalPrice,
     discountPercent,
     currency: 'BRL',
-    affiliateUrl: data.affiliateUrl.trim(),
+    affiliateUrl: input.affiliateUrl,
     inStock: true,
-    freeShipping: data.freeShipping ?? true,
+    freeShipping: input.freeShipping,
     installment: '10x sem juros',
-    rating: 4.9,
-    reviewsCount: 100,
-    lastUpdated: 'Agora',
+    rating: 4.8,
+    reviewsCount: 95,
+    lastUpdated: new Date().toISOString(),
   };
 
-  // Replace existing store offer or append
-  const existingOffers = product.offers || [];
-  const otherOffers = existingOffers.filter(o => o.storeName.toLowerCase() !== storeName.toLowerCase());
-  const updatedOffers = [...otherOffers, newOffer].sort((a, b) => a.price - b.price);
+  // Check if this store already had an offer on this product
+  const existingOffers = targetProduct.offers || [];
+  const offerIndex = existingOffers.findIndex(
+    (o) => o.storeName.toLowerCase() === input.storeName.toLowerCase()
+  );
+
+  let updatedOffers: StoreOffer[];
+  if (offerIndex !== -1) {
+    updatedOffers = [...existingOffers];
+    updatedOffers[offerIndex] = newOffer;
+  } else {
+    updatedOffers = [...existingOffers, newOffer];
+  }
+
+  // Sort offers by price ascending (cheapest first)
+  updatedOffers.sort((a, b) => a.price - b.price);
 
   const bestOffer = updatedOffers[0];
-  const minPrice = bestOffer.price;
-  const maxPrice = Math.max(...updatedOffers.map(o => o.originalPrice || o.price));
+  const lowestPrice = bestOffer.price;
+  const highestPrice = Math.max(...updatedOffers.map((o) => o.originalPrice || o.price));
 
   const updatedProduct: Product = {
-    ...product,
-    minPrice,
-    maxPrice,
+    ...targetProduct,
+    minPrice: lowestPrice,
+    maxPrice: highestPrice,
     bestStore: bestOffer.storeName,
     bestStoreId: bestOffer.storeId,
     offers: updatedOffers,
-    updatedAt: now,
+    updatedAt: new Date().toISOString(),
   };
 
   if (isSupabaseConfigured) {
@@ -739,17 +828,23 @@ export const addOfferToExistingProduct = async (data: AddOfferInput): Promise<Pr
           best_store: updatedProduct.bestStore,
           best_store_id: updatedProduct.bestStoreId,
           offers: updatedProduct.offers,
-          updated_at: now,
+          updated_at: updatedProduct.updatedAt,
         })
-        .eq('id', product.id);
+        .eq('id', input.productId);
     } catch (err) {
-      console.warn('Supabase update product with new offer exception:', err);
+      console.warn('Supabase addOfferToExistingProduct error:', err);
     }
   }
 
-  const customProducts = getStoredCustomProducts();
-  const filtered = customProducts.filter(p => p.id !== product.id);
-  saveStoredCustomProducts([updatedProduct, ...filtered]);
+  // Update local storage
+  const custom = getStoredCustomProducts();
+  const idx = custom.findIndex((p) => p.id === input.productId);
+  if (idx !== -1) {
+    custom[idx] = updatedProduct;
+    saveStoredCustomProducts(custom);
+  } else {
+    saveStoredCustomProducts([updatedProduct, ...custom]);
+  }
 
   return updatedProduct;
 };

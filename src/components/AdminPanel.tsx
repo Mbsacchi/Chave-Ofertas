@@ -14,7 +14,7 @@ import {
   deletePublishedProduct,
   updatePublishedProduct,
   addOfferToExistingProduct,
-  fetchLiveDatabaseProducts
+  fetchAllGlobalProducts
 } from '../services/adminService';
 import { DraftProduct, Product, StoreId } from '../types';
 import { 
@@ -159,7 +159,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     try {
       const [draftsData, prodsData] = await Promise.all([
         fetchDraftProducts(),
-        fetchLiveDatabaseProducts(),
+        fetchAllGlobalProducts(),
       ]);
       setDrafts(draftsData);
       setPublishedProducts(prodsData);
