@@ -64,15 +64,16 @@ const requireAuthSession = async (): Promise<string> => {
 };
 
 /**
- * Searches the public Mercado Livre API directly on the client side
+ * Searches Mercado Livre products via backend Serverless Function (/api/search) with OAuth authentication
  */
 export const searchMercadoLivreAPI = async (query: string): Promise<MercadoLivreSearchResult[]> => {
   if (!query.trim()) return [];
   try {
-    const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query.trim())}`;
+    const url = `/api/search?q=${encodeURIComponent(query.trim())}`;
     const res = await fetch(url);
     if (!res.ok) {
-      throw new Error(`Erro na busca do Mercado Livre: status ${res.status}`);
+      const errorJson = await res.json().catch(() => ({}));
+      throw new Error(errorJson.error || `Erro na busca do Mercado Livre: status ${res.status}`);
     }
     const data = await res.json();
     
@@ -87,7 +88,7 @@ export const searchMercadoLivreAPI = async (query: string): Promise<MercadoLivre
       condition: item.condition || 'new',
     }));
   } catch (err: any) {
-    console.error('Erro ao buscar produtos no Mercado Livre:', err);
+    console.error('Erro ao buscar produtos do Mercado Livre via /api/search:', err);
     throw err;
   }
 };
