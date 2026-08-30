@@ -71,7 +71,14 @@ export const scrapeMercadoLivreProduct = async (rawAffiliateText: string): Promi
   }
 
   const affiliateUrl = urlMatch[0];
-  const response = await fetch(`/api/scrape?url=${encodeURIComponent(affiliateUrl)}`);
+  const response = await fetch('/api/scrape', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify({ url: affiliateUrl }),
+  });
   
   const text = await response.text();
   let data: any;

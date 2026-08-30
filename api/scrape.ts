@@ -17,7 +17,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     // 1. Extração e validação do parâmetro URL
-    const rawUrl = (req.query.url as string) || (req.body && req.body.url);
+    let rawUrl: string | undefined = typeof req.query?.url === 'string' ? req.query.url : undefined;
+    if (!rawUrl && req.body) {
+      if (typeof req.body === 'string') {
+        try {
+          const parsed = JSON.parse(req.body);
+          rawUrl = parsed.url;
+        } catch {
+          rawUrl = req.body;
+        }
+      } else if (typeof req.body === 'object' && req.body.url) {
+        rawUrl = String(req.body.url);
+      }
+    }
+
     if (!rawUrl || typeof rawUrl !== 'string') {
       return res.status(400).json({ error: 'URL do produto não informada.' });
     }
