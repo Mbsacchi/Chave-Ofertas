@@ -73,12 +73,18 @@ export const scrapeMercadoLivreProduct = async (rawAffiliateText: string): Promi
   const affiliateUrl = urlMatch[0];
   const response = await fetch(`/api/scrape?url=${encodeURIComponent(affiliateUrl)}`);
   
-  if (!response.ok) {
-    const errorJson = await response.json().catch(() => ({}));
-    throw new Error(errorJson.error || `Falha ao processar link: status ${response.status}`);
+  const text = await response.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Erro do servidor (status ${response.status}): ${text.substring(0, 100)}`);
   }
 
-  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || `Falha ao processar link: status ${response.status}`);
+  }
+
   if (!data.success) {
     throw new Error(data.error || 'Não foi possível extrair os dados do produto.');
   }

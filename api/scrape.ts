@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS Headers
+  // Garantir que a resposta seja sempre JSON e permitir CORS
+  res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -14,20 +15,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  // Get URL from query or body
-  const rawUrl = (req.query.url as string) || (req.body && req.body.url);
-  if (!rawUrl || typeof rawUrl !== 'string') {
-    return res.status(400).json({ error: 'URL do produto não informada.' });
-  }
-
-  // Find valid HTTP/HTTPS URL
-  const urlMatch = rawUrl.match(/https?:\/\/[^\s]+/i);
-  if (!urlMatch) {
-    return res.status(400).json({ error: 'URL inválida no texto informado.' });
-  }
-  const targetUrl = urlMatch[0];
-
   try {
+    // 1. Extração e validação do parâmetro URL
+    const rawUrl = (req.query.url as string) || (req.body && req.body.url);
+    if (!rawUrl || typeof rawUrl !== 'string') {
+      return res.status(400).json({ error: 'URL do produto não informada.' });
+    }
+
+    const urlMatch = rawUrl.match(/https?:\/\/[^\s]+/i);
+    if (!urlMatch) {
+      return res.status(400).json({ error: 'Nenhuma URL válida encontrada no texto informado.' });
+    }
+    const targetUrl = urlMatch[0];
+
+    // 2. Realizar a requisição HTTP seguindo redirecionamentos (ex: meli.la -> produto.mercadolivre.com.br)
     const response = await fetch(targetUrl, {
       method: 'GET',
       headers: {
@@ -41,13 +42,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (!response.ok) {
       return res.status(response.status).json({ 
-        error: `Erro ao acessar o link: status ${response.status}` 
+        error: `Erro ao acessar o link do Mercado Livre (HTTP ${response.status})` 
       });
     }
 
     const html = await response.text();
 
-    // 1. Extração do Título
+    // 3. Extração do Título
     let title = '';
     const ogTitleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
@@ -62,14 +63,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Limpar sufixos comuns do Mercado Livre no título
+    // Limpar sufixos comuns do Mercado Livre
     title = title
       .replace(/\s*\|\s*Frete gr[aá]tis/gi, '')
       .replace(/\s*\|\s*Mercado\s*Livre.*$/gi, '')
       .replace(/\s*-\s*Mercado\s*Livre.*$/gi, '')
       .trim();
 
-    // 2. Extração da Imagem
+    // 4. Extração da Imagem
     let imageUrl = '';
     const ogImageMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
@@ -79,7 +80,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       imageUrl = ogImageMatch[1].replace('-I.jpg', '-O.webp');
     }
 
-    // 3. Extração do Preço
+    // 5. Extração do Preço
     let price = 0;
     let originalPrice = 0;
 
@@ -107,7 +108,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (price > 0) break;
         }
       } catch {
-        // Continue se falhar o parse de um bloco
+        // Continue se falhar o parse de um bloco individual
       }
     }
 
@@ -121,7 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Tentativa C: Regex em classes HTML do Mercado Livre
+    // Tentativa C: Classes HTML do Mercado Livre
     if (!price || price <= 0) {
       const mlPriceMatch = html.match(/class=["'][^"']*ui-pdp-price__second-line[^"']*[\s\S]*?class=["'][^"']*andes-money-amount__fraction[^"']*">([\d\.]+)<\/span>/i)
         || html.match(/class=["'][^"']*andes-money-amount__fraction[^"']*">([\d\.]+)<\/span>/i);
@@ -148,9 +149,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       freeShipping: true,
     });
   } catch (error: any) {
-    console.error('[Scraper Error]:', error);
+    console.error('[Scraping Error]:', error);
     return res.status(500).json({ 
-      error: error.message || 'Erro ao extrair informações do produto.' 
+      error: error.message || 'Erro interno no scraping' 
     });
   }
 }
