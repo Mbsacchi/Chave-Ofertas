@@ -51,61 +51,6 @@ const requireAuthSession = async (): Promise<string> => {
   return session.user.id;
 };
 
-export interface ScrapedProductData {
-  title: string;
-  price: number;
-  originalPrice: number;
-  imageUrl: string;
-  affiliateUrl: string;
-  freeShipping?: boolean;
-}
-
-/**
- * Extracts product metadata (title, price, image, affiliate URL) by scraping the Mercado Livre page
- * from the pasted affiliate text containing a meli.la or mercadolivre.com link.
- */
-export const scrapeMercadoLivreProduct = async (rawAffiliateText: string): Promise<ScrapedProductData> => {
-  const urlMatch = rawAffiliateText.match(/https?:\/\/[^\s]+/i);
-  if (!urlMatch) {
-    throw new Error('Nenhum link válido (ex: https://meli.la/...) foi encontrado no texto colado.');
-  }
-
-  const affiliateUrl = urlMatch[0];
-  const response = await fetch('/api/scrape', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: JSON.stringify({ url: affiliateUrl }),
-  });
-  
-  const text = await response.text();
-  let data: any;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error(`Erro do servidor (status ${response.status}): ${text.substring(0, 100)}`);
-  }
-
-  if (!response.ok) {
-    throw new Error(data.error || `Falha ao processar link: status ${response.status}`);
-  }
-
-  if (!data.success) {
-    throw new Error(data.error || 'Não foi possível extrair os dados do produto.');
-  }
-
-  return {
-    title: data.title || '',
-    price: Number(data.price) || 0,
-    originalPrice: Number(data.originalPrice) || 0,
-    imageUrl: data.imageUrl || '',
-    affiliateUrl: affiliateUrl,
-    freeShipping: data.freeShipping ?? true,
-  };
-};
-
 /**
  * Fetches all draft products in the staging queue
  */

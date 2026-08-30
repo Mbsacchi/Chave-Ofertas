@@ -12,9 +12,7 @@ import {
   deleteDraftProduct, 
   publishDraftToVitrine, 
   createAndPublishManualProduct,
-  fetchLiveDatabaseProducts,
-  scrapeMercadoLivreProduct,
-  ScrapedProductData
+  fetchLiveDatabaseProducts
 } from '../services/adminService';
 import { DraftProduct, Product } from '../types';
 import { 
@@ -40,7 +38,7 @@ import {
   Link as LinkIcon, 
   Truck, 
   RotateCcw, 
-  Zap 
+  PlusCircle 
 } from 'lucide-react';
 import { CATEGORIES_TREE } from '../data/mockData';
 
@@ -69,19 +67,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Active view tab in admin
   const [activeTab, setActiveTab] = useState<'create' | 'staging' | 'published' | 'sql'>('create');
 
-  // Affiliate Text Generator State
-  const [affiliateRawText, setAffiliateRawText] = useState('');
-  const [isScraping, setIsScraping] = useState(false);
-  const [scrapedProduct, setScrapedProduct] = useState<ScrapedProductData | null>(null);
-
-  // Extracted/Editable Fields
+  // Manual 4 Required Form Fields
   const [manualTitle, setManualTitle] = useState('');
   const [manualPrice, setManualPrice] = useState('');
-  const [manualOriginalPrice, setManualOriginalPrice] = useState('');
   const [manualImageUrl, setManualImageUrl] = useState('');
   const [manualAffiliateUrl, setManualAffiliateUrl] = useState('');
   const [manualCategoryId, setManualCategoryId] = useState(CATEGORIES_TREE[0]?.id || 'eletronicos');
-  const [manualFreeShipping, setManualFreeShipping] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Staging Drafts & Published state
@@ -191,78 +182,54 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     showFeedback('success', 'Sessão encerrada com sucesso.');
   };
 
-  // Automatic Scrape from Pasted Affiliate Text
-  const handleScrapeAffiliateText = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!affiliateRawText.trim()) {
-      showFeedback('error', 'Por favor, cole o texto do painel de Afiliados no campo acima.');
-      return;
-    }
-
-    const urlMatch = affiliateRawText.match(/https?:\/\/[^\s]+/i);
-    if (!urlMatch) {
-      showFeedback('error', 'Nenhum link válido (ex: https://meli.la/...) foi encontrado no texto colado.');
-      return;
-    }
-
-    setIsScraping(true);
-    try {
-      const data = await scrapeMercadoLivreProduct(affiliateRawText);
-      setScrapedProduct(data);
-      setManualTitle(data.title);
-      setManualPrice(data.price ? data.price.toString() : '');
-      setManualOriginalPrice(data.originalPrice ? data.originalPrice.toString() : '');
-      setManualImageUrl(data.imageUrl);
-      setManualAffiliateUrl(data.affiliateUrl);
-      setManualFreeShipping(data.freeShipping ?? true);
-      showFeedback('success', 'Dados extraídos com sucesso! Revise a prévia e adicione à vitrine.');
-    } catch (err: any) {
-      showFeedback('error', err.message || 'Erro ao extrair informações do link.');
-    } finally {
-      setIsScraping(false);
-    }
+  // Clear Form inputs
+  const handleClearForm = () => {
+    setManualTitle('');
+    setManualPrice('');
+    setManualImageUrl('');
+    setManualAffiliateUrl('');
   };
 
-  // Handle Manual Product Submission directly to Vitrine
+  // Submit Manual Form directly to Vitrine
   const handleCreateProductToVitrine = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // 1. Validar Título
     if (!manualTitle.trim()) {
-      showFeedback('error', 'Por favor, informe o Título do Produto.');
+      showFeedback('error', 'Por favor, preencha o Título do Produto.');
       return;
     }
+
+    // 2. Validar Preço
     const cleanPriceStr = manualPrice.toString().replace(/[^\d.,]/g, '').replace(',', '.');
     const numericPrice = parseFloat(cleanPriceStr);
     if (isNaN(numericPrice) || numericPrice <= 0) {
-      showFeedback('error', 'Por favor, informe um Preço válido.');
+      showFeedback('error', 'Por favor, informe um Preço numérico válido.');
       return;
     }
+
+    // 3. Validar URL da Imagem
     if (!manualImageUrl.trim()) {
-      showFeedback('error', 'Por favor, insira a URL da imagem do produto.');
+      showFeedback('error', 'Por favor, informe a URL da Imagem do produto.');
       return;
     }
+
+    // 4. Validar Link de Afiliado
     if (!manualAffiliateUrl.trim()) {
-      showFeedback('error', 'Por favor, insira o Link de Afiliado encurtado.');
+      showFeedback('error', 'Por favor, informe o Link de Afiliado (URL encurtada).');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      let numericOriginalPrice: number | undefined = undefined;
-      if (manualOriginalPrice.trim()) {
-        const cleanOrig = manualOriginalPrice.replace(/[^\d.,]/g, '').replace(',', '.');
-        const parsed = parseFloat(cleanOrig);
-        if (!isNaN(parsed) && parsed > numericPrice) {
-          numericOriginalPrice = parsed;
-        }
-      }
-
       const selectedCategory = CATEGORIES_TREE.find(c => c.id === manualCategoryId) || CATEGORIES_TREE[0];
       const defaultSubcategory = selectedCategory.subcategories[0];
+      const estimatedOriginalPrice = Math.round(numericPrice * 1.15);
 
       const newProduct = await createAndPublishManualProduct({
         title: manualTitle.trim(),
         price: numericPrice,
-        originalPrice: numericOriginalPrice,
+        originalPrice: estimatedOriginalPrice,
         imageUrl: manualImageUrl.trim(),
         affiliateUrl: manualAffiliateUrl.trim(),
         brand: 'Mercado Livre',
@@ -272,17 +239,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         subcategoryName: defaultSubcategory?.name,
         storeName: 'Mercado Livre',
         storeId: 'mercadolivre',
-        freeShipping: manualFreeShipping,
+        freeShipping: true,
       });
 
-      // Update state
+      // Update state & notify app
       setPublishedProducts(prev => [newProduct, ...prev]);
       onProductPublished?.(newProduct);
 
-      // Limpar todos os campos do formulário
+      // Limpar os 4 campos
       handleClearForm();
 
-      showFeedback('success', `Produto "${newProduct.title.slice(0, 30)}..." adicionado à Vitrine com sucesso!`);
+      showFeedback('success', `"${newProduct.title.slice(0, 30)}..." adicionado à Vitrine com sucesso!`);
       loadDraftsAndProducts();
     } catch (err: any) {
       showFeedback('error', err.message || 'Erro ao adicionar produto à vitrine.');
@@ -291,10 +258,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  // Handle Save as Draft (Staging Queue)
+  // Save as Draft in Staging Queue
   const handleSaveAsDraft = async () => {
     if (!manualTitle.trim()) {
-      showFeedback('error', 'Por favor, informe pelo menos o Título do Produto.');
+      showFeedback('error', 'Por favor, preencha pelo menos o Título do Produto.');
       return;
     }
     const cleanPriceStr = manualPrice.toString().replace(/[^\d.,]/g, '').replace(',', '.');
@@ -304,8 +271,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     try {
       const selectedCategory = CATEGORIES_TREE.find(c => c.id === manualCategoryId) || CATEGORIES_TREE[0];
       const defaultSubcategory = selectedCategory.subcategories[0];
-
-      let numericOriginalPrice = manualOriginalPrice ? parseFloat(manualOriginalPrice.replace(',', '.')) : Math.round(numericPrice * 1.15);
+      const estimatedOriginalPrice = Math.round(numericPrice * 1.15);
 
       const newDraft = await addDraftProduct({
         externalId: `manual-${Date.now()}`,
@@ -317,36 +283,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         subcategoryId: defaultSubcategory?.id,
         subcategoryName: defaultSubcategory?.name,
         imageUrl: manualImageUrl.trim() || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=600&auto=format&fit=crop&q=80',
-        originalPrice: numericOriginalPrice,
+        originalPrice: estimatedOriginalPrice,
         promotionalPrice: numericPrice,
-        discountPercent: numericOriginalPrice && numericPrice ? Math.round(((numericOriginalPrice - numericPrice) / numericOriginalPrice) * 100) : 15,
+        discountPercent: 15,
         affiliateUrl: manualAffiliateUrl.trim(),
         storeId: 'mercadolivre',
         storeName: 'Mercado Livre',
-        freeShipping: manualFreeShipping,
+        freeShipping: true,
         installment: '10x sem juros',
       });
 
       setDrafts(prev => [newDraft, ...prev]);
       handleClearForm();
-      showFeedback('success', `"${newDraft.title.slice(0, 30)}..." adicionado à Fila de Rascunhos!`);
+      showFeedback('success', `"${newDraft.title.slice(0, 30)}..." salvo na Fila de Rascunhos!`);
       setActiveTab('staging');
     } catch (err: any) {
       showFeedback('error', err.message || 'Erro ao salvar rascunho.');
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const handleClearForm = () => {
-    setAffiliateRawText('');
-    setScrapedProduct(null);
-    setManualTitle('');
-    setManualPrice('');
-    setManualOriginalPrice('');
-    setManualImageUrl('');
-    setManualAffiliateUrl('');
-    setManualFreeShipping(true);
   };
 
   // Update Draft Fields in Staging
@@ -486,12 +441,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     );
   }
 
-  // Parsed prices for live preview
+  // Live preview helpers
   const parsedPrice = parseFloat(manualPrice.replace(',', '.')) || 0;
-  const parsedOriginalPrice = manualOriginalPrice ? parseFloat(manualOriginalPrice.replace(',', '.')) : 0;
-  const previewDiscount = parsedOriginalPrice > parsedPrice && parsedPrice > 0
-    ? Math.round(((parsedOriginalPrice - parsedPrice) / parsedOriginalPrice) * 100)
-    : (parsedPrice > 0 ? 15 : 0);
 
   // AUTHENTICATED ADMIN DASHBOARD
   return (
@@ -564,7 +515,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
               <div>
                 <span className="font-bold text-amber-300">Modo Local Seguro (Chave Supabase Pendente): </span>
-                <span>Insira sua chave pública anon no arquivo <code className="px-1 py-0.5 rounded bg-slate-950 text-amber-300 font-mono">.env</code> para habilitar a sincronização em nuvem.</span>
+                <span>Insira sua chave pública anon no arquivo <code className="px-1 py-0.5 rounded bg-slate-950 text-amber-300 font-mono">.env</code> para sincronizar com o banco em nuvem.</span>
               </div>
             </div>
             <button
@@ -586,8 +537,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
             }`}
           >
-            <Zap className="w-4 h-4" />
-            <span>Gerador por Link Afiliado</span>
+            <PlusCircle className="w-4 h-4" />
+            <span>Cadastrar Oferta Manual</span>
           </button>
 
           <button
@@ -639,322 +590,229 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </button>
         </div>
 
-        {/* TAB 1: AUTOMATIC AFFILIATE TEXT GENERATOR */}
+        {/* TAB 1: CLEAN MANUAL 4-FIELD REGISTRATION */}
         {activeTab === 'create' && (
-          <div className="space-y-6 animate-in fade-in duration-150">
-            {/* Step 1: Textarea Card */}
-            <div className="p-6 sm:p-8 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 shadow-xl">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-150">
+            {/* Form Section (4 Fields) */}
+            <div className="lg:col-span-8 p-6 sm:p-8 rounded-3xl bg-slate-900 border border-slate-800 space-y-6 shadow-xl">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                 <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/20 uppercase tracking-wider">
-                      Automação Rápida
-                    </span>
-                  </div>
                   <h3 className="text-xl font-black text-white flex items-center gap-2">
                     <Sparkles className="w-5 h-5 text-amber-400" />
-                    <span>Cole o texto do Afiliado</span>
+                    <span>Cadastro Direto de Oferta</span>
                   </h3>
                   <p className="text-xs text-slate-400 mt-1">
-                    Copie todo o bloco de texto gerado no painel oficial do Mercado Livre Afiliados e cole abaixo.
+                    Preencha os 4 campos abaixo com as informações do seu painel de afiliados.
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setAffiliateRawText(`🔍 Cole este texto no buscador do Mercado Livre: 53AREU-JT5E\n🔗 Ou acesse o link:\nhttps://meli.la/1Uet23y`)}
-                  className="text-xs text-amber-400 hover:text-amber-300 font-bold self-start sm:self-auto py-1 px-3 rounded-lg bg-amber-400/10 border border-amber-400/20 transition-colors"
-                >
-                  Colar Exemplo de Teste
-                </button>
+                {(manualTitle || manualPrice || manualImageUrl || manualAffiliateUrl) && (
+                  <button
+                    type="button"
+                    onClick={handleClearForm}
+                    className="text-xs text-slate-400 hover:text-rose-400 font-bold flex items-center gap-1 transition-colors"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Limpar</span>
+                  </button>
+                )}
               </div>
 
-              <form onSubmit={handleScrapeAffiliateText} className="space-y-3">
-                <textarea
-                  rows={4}
-                  required
-                  value={affiliateRawText}
-                  onChange={(e) => setAffiliateRawText(e.target.value)}
-                  placeholder={`🔍 Cole este texto no buscador do Mercado Livre: 53AREU-JT5E\n🔗 Ou acesse o link:\nhttps://meli.la/1Uet23y`}
-                  className="w-full p-4 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 font-mono transition-colors shadow-inner"
-                />
+              <form onSubmit={handleCreateProductToVitrine} className="space-y-5">
+                {/* 1. Título do Produto */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-200 mb-1.5 flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-amber-400" />
+                    <span>1. Título do Produto *</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={manualTitle}
+                    onChange={(e) => setManualTitle(e.target.value)}
+                    placeholder="Ex: Fone de Ouvido Bluetooth JBL Tune 510BT Preto"
+                    className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
+                  />
+                </div>
 
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[11px] text-slate-500">
-                    O robô detectará automaticamente a URL encurtada <code className="text-amber-400 font-mono">meli.la</code> e extrairá os dados da página.
-                  </span>
+                {/* 2. Preço */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5" />
+                      <span>2. Preço Promocional (R$) *</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={manualPrice}
+                      onChange={(e) => setManualPrice(e.target.value)}
+                      placeholder="Ex: 199.90"
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/40 text-sm font-black text-amber-400 placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
+                    />
+                  </div>
 
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                      Categoria da Vitrine
+                    </label>
+                    <select
+                      value={manualCategoryId}
+                      onChange={(e) => setManualCategoryId(e.target.value)}
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 transition-colors"
+                    >
+                      {CATEGORIES_TREE.map(cat => (
+                        <option key={cat.id} value={cat.id}>{cat.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* 3. URL da Imagem */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-200 mb-1.5 flex items-center gap-1.5">
+                    <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+                    <span>3. URL da Imagem (Link da foto) *</span>
+                  </label>
+                  <input
+                    type="url"
+                    required
+                    value={manualImageUrl}
+                    onChange={(e) => setManualImageUrl(e.target.value)}
+                    placeholder="Ex: https://http2.mlstatic.com/D_NQ_NP_688327-MLA46552310340_062021-O.webp"
+                    className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 font-mono transition-colors shadow-inner"
+                  />
+                </div>
+
+                {/* 4. Link de Afiliado (URL encurtada) */}
+                <div>
+                  <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <LinkIcon className="w-3.5 h-3.5" />
+                      <span>4. Link de Afiliado (URL Encurtada / Destino de Compra) *</span>
+                    </span>
+                    {manualAffiliateUrl && (
+                      <a
+                        href={manualAffiliateUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] text-amber-400 hover:underline flex items-center gap-1 font-normal"
+                      >
+                        <span>Testar Link</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </label>
+                  <input
+                    type="url"
+                    required
+                    value={manualAffiliateUrl}
+                    onChange={(e) => setManualAffiliateUrl(e.target.value)}
+                    placeholder="Ex: https://meli.la/1Uet23y ou https://mercadolivre.com/sec/xxxx"
+                    className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/50 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 font-mono transition-colors shadow-inner"
+                  />
+                </div>
+
+                {/* Action Buttons */}
+                <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center gap-3">
                   <button
                     type="submit"
-                    disabled={isScraping || !affiliateRawText.trim()}
-                    className="py-3 px-6 rounded-2xl font-black text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 disabled:opacity-50 transition-all flex items-center gap-2 text-xs shrink-0 shadow-lg shadow-amber-400/20"
+                    disabled={isSubmitting || !manualTitle || !manualPrice || !manualImageUrl || !manualAffiliateUrl}
+                    className="flex-1 py-3.5 px-6 rounded-2xl font-black text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-sm shadow-xl shadow-amber-400/20"
                   >
-                    {isScraping ? (
+                    {isSubmitting ? (
                       <RefreshCw className="w-4 h-4 animate-spin" />
                     ) : (
-                      <Zap className="w-4 h-4" />
+                      <PlusCircle className="w-4 h-4" />
                     )}
-                    <span>{isScraping ? 'Extraindo Dados...' : 'Gerar Oferta'}</span>
+                    <span>{isSubmitting ? 'Salvando Oferta...' : 'Adicionar à Vitrine'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveAsDraft}
+                    disabled={isSubmitting || !manualTitle}
+                    className="py-3.5 px-5 rounded-2xl font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 active:scale-98 disabled:opacity-50 transition-all flex items-center gap-2 text-xs"
+                  >
+                    <Layers className="w-4 h-4 text-amber-400" />
+                    <span>Salvar Rascunho</span>
                   </button>
                 </div>
               </form>
             </div>
 
-            {/* Step 2: Extracted Offer Details & Live Preview */}
-            {(scrapedProduct || manualTitle || manualImageUrl) && (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in slide-in-from-bottom-4 duration-200">
-                {/* Form Section */}
-                <div className="lg:col-span-8 p-6 sm:p-8 rounded-3xl bg-slate-900 border border-slate-800 space-y-6 shadow-xl">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-                    <div>
-                      <h4 className="text-lg font-black text-white flex items-center gap-2">
-                        <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                        <span>Dados Extraídos da Oferta</span>
-                      </h4>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        Revise e ajuste os campos conforme desejar antes de adicionar à vitrine.
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={handleClearForm}
-                      className="text-xs text-slate-400 hover:text-rose-400 font-bold flex items-center gap-1 transition-colors"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Limpar Tudo</span>
-                    </button>
-                  </div>
-
-                  <form onSubmit={handleCreateProductToVitrine} className="space-y-5">
-                    {/* Title */}
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
-                        <Tag className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Título do Produto *</span>
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={manualTitle}
-                        onChange={(e) => setManualTitle(e.target.value)}
-                        className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
-                      />
-                    </div>
-
-                    {/* Price & Original Price */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center gap-1.5">
-                          <DollarSign className="w-3.5 h-3.5" />
-                          <span>Preço Promocional (R$) *</span>
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={manualPrice}
-                          onChange={(e) => setManualPrice(e.target.value)}
-                          className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/40 text-sm font-black text-amber-400 focus:outline-none focus:border-amber-400 transition-colors"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-400 mb-1.5 flex items-center gap-1.5">
-                          <DollarSign className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Preço Original / "De" (R$) <span className="text-[10px] font-normal text-slate-500">(Opcional)</span></span>
-                        </label>
-                        <input
-                          type="text"
-                          value={manualOriginalPrice}
-                          onChange={(e) => setManualOriginalPrice(e.target.value)}
-                          className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-slate-300 focus:outline-none focus:border-amber-400 transition-colors"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Image URL */}
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
-                        <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
-                        <span>URL da Imagem em Alta Resolução *</span>
-                      </label>
-                      <input
-                        type="url"
-                        required
-                        value={manualImageUrl}
-                        onChange={(e) => setManualImageUrl(e.target.value)}
-                        className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 font-mono transition-colors shadow-inner"
-                      />
-                    </div>
-
-                    {/* Affiliate Link */}
-                    <div>
-                      <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center justify-between">
-                        <span className="flex items-center gap-1.5">
-                          <LinkIcon className="w-3.5 h-3.5" />
-                          <span>Link de Afiliado Encurtado (Destino de Compra) *</span>
-                        </span>
-                        {manualAffiliateUrl && (
-                          <a
-                            href={manualAffiliateUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-[11px] text-amber-400 hover:underline flex items-center gap-1"
-                          >
-                            <span>Testar Link</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
-                      </label>
-                      <input
-                        type="url"
-                        required
-                        value={manualAffiliateUrl}
-                        onChange={(e) => setManualAffiliateUrl(e.target.value)}
-                        className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/50 text-xs text-white focus:outline-none focus:border-amber-400 font-mono transition-colors shadow-inner"
-                      />
-                    </div>
-
-                    {/* Category & Free Shipping */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                          Categoria da Vitrine
-                        </label>
-                        <select
-                          value={manualCategoryId}
-                          onChange={(e) => setManualCategoryId(e.target.value)}
-                          className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 transition-colors"
-                        >
-                          {CATEGORIES_TREE.map(cat => (
-                            <option key={cat.id} value={cat.id}>{cat.name}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                          Opções de Entrega
-                        </label>
-                        <label className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
-                          <input
-                            type="checkbox"
-                            checked={manualFreeShipping}
-                            onChange={(e) => setManualFreeShipping(e.target.checked)}
-                            className="w-4 h-4 accent-amber-400 rounded"
-                          />
-                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
-                            <Truck className="w-4 h-4 text-emerald-400" />
-                            <span>Destacar como Frete Grátis</span>
-                          </div>
-                        </label>
-                      </div>
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center gap-3">
-                      <button
-                        type="submit"
-                        disabled={isSubmitting}
-                        className="flex-1 py-3.5 px-6 rounded-2xl font-black text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-sm shadow-xl shadow-amber-400/20"
-                      >
-                        {isSubmitting ? (
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Sparkles className="w-4 h-4" />
-                        )}
-                        <span>{isSubmitting ? 'Publicando...' : 'Adicionar à Vitrine'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handleSaveAsDraft}
-                        disabled={isSubmitting}
-                        className="py-3.5 px-5 rounded-2xl font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 active:scale-98 disabled:opacity-50 transition-all flex items-center gap-2 text-xs"
-                      >
-                        <Layers className="w-4 h-4 text-amber-400" />
-                        <span>Salvar como Rascunho</span>
-                      </button>
-                    </div>
-                  </form>
+            {/* Live Preview Card */}
+            <div className="lg:col-span-4 space-y-4">
+              <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 shadow-xl">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                    <Eye className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Prévia em Tempo Real</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-800">
+                    Mercado Livre
+                  </span>
                 </div>
 
-                {/* Live Preview Card */}
-                <div className="lg:col-span-4 space-y-4">
-                  <div className="p-4 rounded-3xl bg-slate-900 border border-slate-800">
-                    <div className="flex items-center justify-between mb-3 px-1">
-                      <span className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
-                        <Eye className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Prévia na Vitrine</span>
-                      </span>
-                      <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-800">
-                        Mercado Livre
-                      </span>
-                    </div>
-
-                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 shadow-2xl">
-                      <div className="relative aspect-square rounded-xl bg-slate-900 overflow-hidden flex items-center justify-center p-2 border border-slate-800/80">
-                        {manualImageUrl ? (
-                          <img
-                            src={manualImageUrl}
-                            alt="Preview"
-                            className="max-h-full max-w-full object-contain"
-                            onError={(e) => {
-                              (e.target as HTMLElement).style.display = 'none';
-                            }}
-                          />
-                        ) : (
-                          <div className="text-center p-4 space-y-2 text-slate-600">
-                            <ImageIcon className="w-10 h-10 mx-auto stroke-1" />
-                            <p className="text-[11px]">Imagem do produto aparecerá aqui</p>
-                          </div>
-                        )}
-
-                        {manualFreeShipping && (
-                          <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/90 text-emerald-400 text-[10px] font-bold border border-emerald-800 flex items-center gap-1">
-                            <Truck className="w-3 h-3" />
-                            <span>Frete Grátis</span>
-                          </span>
-                        )}
-
-                        {previewDiscount > 0 && (
-                          <span className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black shadow-md">
-                            -{previewDiscount}%
-                          </span>
-                        )}
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 shadow-2xl">
+                  <div className="relative aspect-square rounded-xl bg-slate-900 overflow-hidden flex items-center justify-center p-2 border border-slate-800/80">
+                    {manualImageUrl ? (
+                      <img
+                        src={manualImageUrl}
+                        alt="Preview"
+                        className="max-h-full max-w-full object-contain"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <div className="text-center p-4 space-y-2 text-slate-600">
+                        <ImageIcon className="w-10 h-10 mx-auto stroke-1" />
+                        <p className="text-[11px]">A foto do produto aparecerá aqui</p>
                       </div>
+                    )}
 
-                      <div className="space-y-1.5">
-                        <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
-                          Mercado Livre Oficial
+                    <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/90 text-emerald-400 text-[10px] font-bold border border-emerald-800 flex items-center gap-1">
+                      <Truck className="w-3 h-3" />
+                      <span>Frete Grátis</span>
+                    </span>
+
+                    {parsedPrice > 0 && (
+                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black shadow-md">
+                        -15%
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
+                      Mercado Livre Oficial
+                    </span>
+                    <h4 className="text-xs font-bold text-white line-clamp-2 leading-snug">
+                      {manualTitle || 'Título do Produto aparecerá aqui...'}
+                    </h4>
+
+                    <div className="pt-2 flex items-baseline gap-2">
+                      <span className="text-lg font-black text-amber-400">
+                        R$ {parsedPrice > 0 ? parsedPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}
+                      </span>
+                      {parsedPrice > 0 && (
+                        <span className="text-xs text-slate-500 line-through">
+                          R$ {(parsedPrice * 1.15).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </span>
-                        <h4 className="text-xs font-bold text-white line-clamp-2 leading-snug">
-                          {manualTitle || 'Título do Produto...'}
-                        </h4>
+                      )}
+                    </div>
+                  </div>
 
-                        <div className="pt-2 flex items-baseline gap-2">
-                          <span className="text-lg font-black text-amber-400">
-                            R$ {parsedPrice > 0 ? parsedPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}
-                          </span>
-                          {parsedOriginalPrice > parsedPrice && (
-                            <span className="text-xs text-slate-500 line-through">
-                              R$ {parsedOriginalPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="pt-2 border-t border-slate-800">
-                        <div className="w-full py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-md">
-                          <span>Ver no Mercado Livre</span>
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </div>
-                      </div>
+                  <div className="pt-2 border-t border-slate-800">
+                    <div className="w-full py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-md">
+                      <span>Ver no Mercado Livre</span>
+                      <ExternalLink className="w-3.5 h-3.5" />
                     </div>
                   </div>
                 </div>
               </div>
-            )}
+            </div>
           </div>
         )}
 
@@ -989,14 +847,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <Layers className="w-10 h-10 text-slate-600 mx-auto" />
                 <h4 className="text-base font-bold text-white">Nenhum rascunho pendente</h4>
                 <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                  Cole o texto do painel de Afiliados na aba principal para gerar novas ofertas instantâneas.
+                  Cadastre novas ofertas na aba principal para publicá-las instantaneamente ou salvá-las como rascunho.
                 </p>
                 <button
                   onClick={() => setActiveTab('create')}
                   className="px-5 py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs inline-flex items-center gap-2 shadow-lg shadow-amber-400/20 mt-2"
                 >
-                  <Zap className="w-3.5 h-3.5" />
-                  <span>Gerar Nova Oferta</span>
+                  <PlusCircle className="w-3.5 h-3.5" />
+                  <span>Cadastrar Nova Oferta</span>
                 </button>
               </div>
             ) : (
@@ -1105,7 +963,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         <div>
                           <label className="block text-[11px] font-bold text-amber-400 mb-1 flex items-center justify-between">
                             <span>Link de Afiliado Oficial (Destino do Botão de Compra) *</span>
-                            <span className="text-[10px] text-slate-500 font-normal">Ex: https://mercadolivre.com/sec/xxxxxx</span>
+                            <span className="text-[10px] text-slate-500 font-normal">Ex: https://meli.la/xxxxxx</span>
                           </label>
                           <div className="flex gap-2">
                             <input
