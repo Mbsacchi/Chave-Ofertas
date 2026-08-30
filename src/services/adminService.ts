@@ -1007,7 +1007,7 @@ export const syncAwinOffers = async (): Promise<{ count: number; products: Produ
               originalPrice: 2899.00,
               discountPercent: 24,
               currency: 'BRL',
-              affiliateUrl: `https://www.awin1.com/cread.php?awinmid=17621&awinaffid=${publisherId}&clickref=site&p=https%3A%2F%2Fwww.casasbahia.com.br`,
+              affiliateUrl: `https://www.awin1.com/cread.php?awinmid=17621&awinaffid=${publisherId}&clickref=site&p=https%3A%2F%2Fwww.casasbahia.com.br%2Fsmart-tv-50-crystal-uhd-4k-samsung-50du7700%2Fp%2F15642491`,
               inStock: true,
               freeShipping: true,
               installment: '10x de R$ 219,90 sem juros',
@@ -1049,7 +1049,7 @@ export const syncAwinOffers = async (): Promise<{ count: number; products: Produ
               originalPrice: 499.90,
               discountPercent: 30,
               currency: 'BRL',
-              affiliateUrl: `https://www.awin1.com/cread.php?awinmid=17622&awinaffid=${publisherId}&clickref=site&p=https%3A%2F%2Fwww.pontofrio.com.br`,
+              affiliateUrl: `https://www.awin1.com/cread.php?awinmid=17622&awinaffid=${publisherId}&clickref=site&p=https%3A%2F%2Fwww.pontofrio.com.br%2Ffritadeira-eletrica-airfryer-philips-walita%2Fp%2F15438812`,
               inStock: true,
               freeShipping: true,
               installment: '6x de R$ 58,31 sem juros',
@@ -1091,7 +1091,7 @@ export const syncAwinOffers = async (): Promise<{ count: number; products: Produ
               originalPrice: 1799.00,
               discountPercent: 28,
               currency: 'BRL',
-              affiliateUrl: `https://www.awin1.com/cread.php?awinmid=17623&awinaffid=${publisherId}&clickref=site&p=https%3A%2F%2Fwww.extra.com.br`,
+              affiliateUrl: `https://www.awin1.com/cread.php?awinmid=17623&awinaffid=${publisherId}&clickref=site&p=https%3A%2F%2Fwww.extra.com.br%2Fsmartphone-motorola-moto-g84-5g-256gb%2Fp%2F15671190`,
               inStock: true,
               freeShipping: true,
               installment: '10x de R$ 129,90 sem juros',
@@ -1111,63 +1111,68 @@ export const syncAwinOffers = async (): Promise<{ count: number; products: Produ
   }
 
   const incomingProducts: Product[] = data.products || [];
-  const existingProducts = await fetchAllGlobalProducts();
   const custom = getStoredCustomProducts();
 
-  let addedCount = 0;
+  let upsertedCount = 0;
 
   for (const newProd of incomingProducts) {
-    const exists = existingProducts.some(
+    // 1. Upsert to Supabase (Updates existing Awin links or inserts new ones)
+    if (isSupabaseConfigured) {
+      try {
+        await supabase.from('products').upsert({
+          id: newProd.id,
+          title: newProd.title,
+          slug: newProd.slug,
+          description: newProd.description,
+          category_id: newProd.categoryId,
+          category_name: newProd.categoryName,
+          brand: newProd.brand,
+          sku: newProd.sku,
+          image_url: newProd.imageUrl,
+          min_price: newProd.minPrice,
+          max_price: newProd.maxPrice,
+          historical_lowest_price: newProd.historicalLowestPrice,
+          best_store: newProd.bestStore,
+          best_store_id: newProd.bestStoreId,
+          rating: newProd.rating,
+          reviews_count: newProd.reviewsCount,
+          is_verified: newProd.isVerified,
+          is_active: newProd.isActive,
+          offers: newProd.offers,
+          price_history: newProd.priceHistory,
+          created_at: newProd.createdAt,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'id' });
+      } catch (dbErr) {
+        console.warn('Supabase upsert Awin product error:', dbErr);
+      }
+    }
+
+    // 2. Upsert to Local Storage (Update existing or unshift new)
+    const existingIndex = custom.findIndex(
       (p) => p.id === newProd.id || p.title.toLowerCase().trim() === newProd.title.toLowerCase().trim()
     );
 
-    if (!exists) {
-      // Save to Supabase if configured
-      if (isSupabaseConfigured) {
-        try {
-          await supabase.from('products').insert([
-            {
-              id: newProd.id,
-              title: newProd.title,
-              slug: newProd.slug,
-              description: newProd.description,
-              category_id: newProd.categoryId,
-              category_name: newProd.categoryName,
-              brand: newProd.brand,
-              sku: newProd.sku,
-              image_url: newProd.imageUrl,
-              min_price: newProd.minPrice,
-              max_price: newProd.maxPrice,
-              historical_lowest_price: newProd.historicalLowestPrice,
-              best_store: newProd.bestStore,
-              best_store_id: newProd.bestStoreId,
-              rating: newProd.rating,
-              reviews_count: newProd.reviewsCount,
-              is_verified: newProd.isVerified,
-              is_active: newProd.isActive,
-              offers: newProd.offers,
-              price_history: newProd.priceHistory,
-              created_at: newProd.createdAt,
-              updated_at: newProd.updatedAt,
-            }
-          ]);
-        } catch (dbErr) {
-          console.warn('Supabase insert Awin product error:', dbErr);
-        }
-      }
-
-      // Add to local custom products
+    if (existingIndex !== -1) {
+      custom[existingIndex] = {
+        ...custom[existingIndex],
+        ...newProd,
+        offers: newProd.offers,
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
       custom.unshift(newProd);
-      addedCount++;
     }
+
+    upsertedCount++;
   }
 
   saveStoredCustomProducts(custom);
 
   return {
-    count: addedCount || incomingProducts.length,
+    count: upsertedCount || incomingProducts.length,
     products: incomingProducts,
-    message: data.message || `${incomingProducts.length} ofertas sincronizadas com sucesso da rede Awin!`,
+    message: data.message || `${incomingProducts.length} ofertas e links profundos sincronizados com sucesso da rede Awin!`,
   };
 };
 
