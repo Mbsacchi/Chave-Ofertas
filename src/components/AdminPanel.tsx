@@ -12,7 +12,9 @@ import {
   deleteDraftProduct, 
   publishDraftToVitrine, 
   createAndPublishManualProduct,
-  fetchLiveDatabaseProducts
+  fetchLiveDatabaseProducts,
+  scrapeMercadoLivreProduct,
+  ScrapedProductData
 } from '../services/adminService';
 import { DraftProduct, Product } from '../types';
 import { 
@@ -29,16 +31,16 @@ import {
   Layers, 
   RefreshCw, 
   Eye, 
-  ArrowLeft,
-  ShoppingBag,
-  Sparkles,
-  PlusCircle,
-  ImageIcon,
-  Tag,
-  DollarSign,
-  Link as LinkIcon,
-  Truck,
-  RotateCcw
+  ArrowLeft, 
+  ShoppingBag, 
+  Sparkles, 
+  ImageIcon, 
+  Tag, 
+  DollarSign, 
+  Link as LinkIcon, 
+  Truck, 
+  RotateCcw, 
+  Zap 
 } from 'lucide-react';
 import { CATEGORIES_TREE } from '../data/mockData';
 
@@ -67,13 +69,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Active view tab in admin
   const [activeTab, setActiveTab] = useState<'create' | 'staging' | 'published' | 'sql'>('create');
 
-  // Manual Product Form state
+  // Affiliate Text Generator State
+  const [affiliateRawText, setAffiliateRawText] = useState('');
+  const [isScraping, setIsScraping] = useState(false);
+  const [scrapedProduct, setScrapedProduct] = useState<ScrapedProductData | null>(null);
+
+  // Extracted/Editable Fields
   const [manualTitle, setManualTitle] = useState('');
   const [manualPrice, setManualPrice] = useState('');
   const [manualOriginalPrice, setManualOriginalPrice] = useState('');
   const [manualImageUrl, setManualImageUrl] = useState('');
   const [manualAffiliateUrl, setManualAffiliateUrl] = useState('');
-  const [manualBrand, setManualBrand] = useState('Mercado Livre');
   const [manualCategoryId, setManualCategoryId] = useState(CATEGORIES_TREE[0]?.id || 'eletronicos');
   const [manualFreeShipping, setManualFreeShipping] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -185,6 +191,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     showFeedback('success', 'Sessão encerrada com sucesso.');
   };
 
+  // Automatic Scrape from Pasted Affiliate Text
+  const handleScrapeAffiliateText = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!affiliateRawText.trim()) {
+      showFeedback('error', 'Por favor, cole o texto do painel de Afiliados no campo acima.');
+      return;
+    }
+
+    const urlMatch = affiliateRawText.match(/https?:\/\/[^\s]+/i);
+    if (!urlMatch) {
+      showFeedback('error', 'Nenhum link válido (ex: https://meli.la/...) foi encontrado no texto colado.');
+      return;
+    }
+
+    setIsScraping(true);
+    try {
+      const data = await scrapeMercadoLivreProduct(affiliateRawText);
+      setScrapedProduct(data);
+      setManualTitle(data.title);
+      setManualPrice(data.price ? data.price.toString() : '');
+      setManualOriginalPrice(data.originalPrice ? data.originalPrice.toString() : '');
+      setManualImageUrl(data.imageUrl);
+      setManualAffiliateUrl(data.affiliateUrl);
+      setManualFreeShipping(data.freeShipping ?? true);
+      showFeedback('success', 'Dados extraídos com sucesso! Revise a prévia e adicione à vitrine.');
+    } catch (err: any) {
+      showFeedback('error', err.message || 'Erro ao extrair informações do link.');
+    } finally {
+      setIsScraping(false);
+    }
+  };
+
   // Handle Manual Product Submission directly to Vitrine
   const handleCreateProductToVitrine = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -227,7 +265,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         originalPrice: numericOriginalPrice,
         imageUrl: manualImageUrl.trim(),
         affiliateUrl: manualAffiliateUrl.trim(),
-        brand: manualBrand.trim() || 'Mercado Livre',
+        brand: 'Mercado Livre',
         categoryId: selectedCategory.id,
         categoryName: selectedCategory.name,
         subcategoryId: defaultSubcategory?.id,
@@ -247,7 +285,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       showFeedback('success', `Produto "${newProduct.title.slice(0, 30)}..." adicionado à Vitrine com sucesso!`);
       loadDraftsAndProducts();
     } catch (err: any) {
-      showFeedback('error', err.message || 'Erro ao adicionar produto.');
+      showFeedback('error', err.message || 'Erro ao adicionar produto à vitrine.');
     } finally {
       setIsSubmitting(false);
     }
@@ -272,7 +310,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       const newDraft = await addDraftProduct({
         externalId: `manual-${Date.now()}`,
         title: manualTitle.trim(),
-        brand: manualBrand.trim() || 'Mercado Livre',
+        brand: 'Mercado Livre',
         description: `${manualTitle.trim()} com garantia oficial e melhores condições no Mercado Livre.`,
         categoryId: selectedCategory.id,
         categoryName: selectedCategory.name,
@@ -301,12 +339,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const handleClearForm = () => {
+    setAffiliateRawText('');
+    setScrapedProduct(null);
     setManualTitle('');
     setManualPrice('');
     setManualOriginalPrice('');
     setManualImageUrl('');
     setManualAffiliateUrl('');
-    setManualBrand('Mercado Livre');
     setManualFreeShipping(true);
   };
 
@@ -547,8 +586,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
             }`}
           >
-            <PlusCircle className="w-4 h-4" />
-            <span>Cadastrar Produto Manualmente</span>
+            <Zap className="w-4 h-4" />
+            <span>Gerador por Link Afiliado</span>
           </button>
 
           <button
@@ -600,264 +639,322 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </button>
         </div>
 
-        {/* TAB 1: MANUAL PRODUCT REGISTRATION FORM */}
+        {/* TAB 1: AUTOMATIC AFFILIATE TEXT GENERATOR */}
         {activeTab === 'create' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-150">
-            {/* Form Section */}
-            <div className="lg:col-span-8 p-6 sm:p-8 rounded-3xl bg-slate-900 border border-slate-800 space-y-6 shadow-xl">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/20 uppercase tracking-wider">
-                    Cadastro Direto
-                  </span>
-                </div>
-                <h3 className="text-xl font-black text-white flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-amber-400" />
-                  <span>Cadastrar Oferta do Mercado Livre</span>
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Copie o título, preço, link da foto e seu link encurtado gerado no painel de Afiliados do Mercado Livre para publicar na vitrine.
-                </p>
-              </div>
-
-              <form onSubmit={handleCreateProductToVitrine} className="space-y-5">
-                {/* 1. Product Title */}
+          <div className="space-y-6 animate-in fade-in duration-150">
+            {/* Step 1: Textarea Card */}
+            <div className="p-6 sm:p-8 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
-                    <Tag className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Título do Produto *</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={manualTitle}
-                    onChange={(e) => setManualTitle(e.target.value)}
-                    placeholder="Ex: PlayStation 5 Slim Edição Digital 1TB + 2 Jogos"
-                    className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
-                  />
-                </div>
-
-                {/* 2. Price & Original Price */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center gap-1.5">
-                      <DollarSign className="w-3.5 h-3.5" />
-                      <span>Preço Promocional / Atual (R$) *</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={manualPrice}
-                      onChange={(e) => setManualPrice(e.target.value)}
-                      placeholder="Ex: 3499.90"
-                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/40 text-sm font-black text-amber-400 placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors"
-                    />
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/20 uppercase tracking-wider">
+                      Automação Rápida
+                    </span>
                   </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-400 mb-1.5 flex items-center gap-1.5">
-                      <DollarSign className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Preço Original / "De" (R$) <span className="text-[10px] font-normal text-slate-500">(Opcional)</span></span>
-                    </label>
-                    <input
-                      type="text"
-                      value={manualOriginalPrice}
-                      onChange={(e) => setManualOriginalPrice(e.target.value)}
-                      placeholder="Ex: 3999.00"
-                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors"
-                    />
-                  </div>
-                </div>
-
-                {/* 3. Image URL */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
-                    <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
-                    <span>URL da Imagem do Produto *</span>
-                  </label>
-                  <input
-                    type="url"
-                    required
-                    value={manualImageUrl}
-                    onChange={(e) => setManualImageUrl(e.target.value)}
-                    placeholder="Cole a URL da foto (ex: https://http2.mlstatic.com/D_NQ_NP_...-O.webp)"
-                    className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Dica: No Mercado Livre, clique com o botão direito na foto do produto e escolha "Copiar endereço da imagem".
+                  <h3 className="text-xl font-black text-white flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-amber-400" />
+                    <span>Cole o texto do Afiliado</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Copie todo o bloco de texto gerado no painel oficial do Mercado Livre Afiliados e cole abaixo.
                   </p>
                 </div>
 
-                {/* 4. Affiliate Link */}
-                <div>
-                  <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <LinkIcon className="w-3.5 h-3.5" />
-                      <span>Link de Afiliado (URL Encurtada) *</span>
-                    </span>
-                    <span className="text-[10px] text-slate-400 font-normal">
-                      Ex: https://mercadolivre.com/sec/xxxxxx
-                    </span>
-                  </label>
-                  <input
-                    type="url"
-                    required
-                    value={manualAffiliateUrl}
-                    onChange={(e) => setManualAffiliateUrl(e.target.value)}
-                    placeholder="Cole o link encurtado com seu ID de comissão..."
-                    className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/50 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors shadow-inner font-mono text-xs"
-                  />
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setAffiliateRawText(`🔍 Cole este texto no buscador do Mercado Livre: 53AREU-JT5E\n🔗 Ou acesse o link:\nhttps://meli.la/1Uet23y`)}
+                  className="text-xs text-amber-400 hover:text-amber-300 font-bold self-start sm:self-auto py-1 px-3 rounded-lg bg-amber-400/10 border border-amber-400/20 transition-colors"
+                >
+                  Colar Exemplo de Teste
+                </button>
+              </div>
 
-                {/* Options: Category & Free Shipping */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                      Categoria da Vitrine
-                    </label>
-                    <select
-                      value={manualCategoryId}
-                      onChange={(e) => setManualCategoryId(e.target.value)}
-                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 transition-colors"
-                    >
-                      {CATEGORIES_TREE.map(cat => (
-                        <option key={cat.id} value={cat.id}>{cat.name}</option>
-                      ))}
-                    </select>
-                  </div>
+              <form onSubmit={handleScrapeAffiliateText} className="space-y-3">
+                <textarea
+                  rows={4}
+                  required
+                  value={affiliateRawText}
+                  onChange={(e) => setAffiliateRawText(e.target.value)}
+                  placeholder={`🔍 Cole este texto no buscador do Mercado Livre: 53AREU-JT5E\n🔗 Ou acesse o link:\nhttps://meli.la/1Uet23y`}
+                  className="w-full p-4 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 font-mono transition-colors shadow-inner"
+                />
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                      Opções de Entrega
-                    </label>
-                    <label className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={manualFreeShipping}
-                        onChange={(e) => setManualFreeShipping(e.target.checked)}
-                        className="w-4 h-4 accent-amber-400 rounded"
-                      />
-                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
-                        <Truck className="w-4 h-4 text-emerald-400" />
-                        <span>Destacar como Frete Grátis</span>
-                      </div>
-                    </label>
-                  </div>
-                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[11px] text-slate-500">
+                    O robô detectará automaticamente a URL encurtada <code className="text-amber-400 font-mono">meli.la</code> e extrairá os dados da página.
+                  </span>
 
-                {/* Form Action Buttons */}
-                <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center gap-3">
                   <button
                     type="submit"
-                    disabled={isSubmitting}
-                    className="flex-1 py-3.5 px-6 rounded-2xl font-black text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-sm shadow-xl shadow-amber-400/20"
+                    disabled={isScraping || !affiliateRawText.trim()}
+                    className="py-3 px-6 rounded-2xl font-black text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 disabled:opacity-50 transition-all flex items-center gap-2 text-xs shrink-0 shadow-lg shadow-amber-400/20"
                   >
-                    {isSubmitting ? (
+                    {isScraping ? (
                       <RefreshCw className="w-4 h-4 animate-spin" />
                     ) : (
-                      <Sparkles className="w-4 h-4" />
+                      <Zap className="w-4 h-4" />
                     )}
-                    <span>{isSubmitting ? 'Publicando...' : 'Adicionar à Vitrine'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleSaveAsDraft}
-                    disabled={isSubmitting}
-                    className="py-3.5 px-5 rounded-2xl font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 active:scale-98 disabled:opacity-50 transition-all flex items-center gap-2 text-xs"
-                    title="Salvar na fila de rascunhos para revisar depois"
-                  >
-                    <Layers className="w-4 h-4 text-amber-400" />
-                    <span>Salvar como Rascunho</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleClearForm}
-                    className="p-3.5 rounded-2xl bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-white transition-colors border border-slate-800"
-                    title="Limpar todos os campos"
-                  >
-                    <RotateCcw className="w-4 h-4" />
+                    <span>{isScraping ? 'Extraindo Dados...' : 'Gerar Oferta'}</span>
                   </button>
                 </div>
               </form>
             </div>
 
-            {/* Live Preview Section */}
-            <div className="lg:col-span-4 space-y-4">
-              <div className="p-4 rounded-3xl bg-slate-900 border border-slate-800">
-                <div className="flex items-center justify-between mb-3 px-1">
-                  <span className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
-                    <Eye className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Prévia ao Vivo na Vitrine</span>
-                  </span>
-                  <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-800">
-                    Mercado Livre
-                  </span>
+            {/* Step 2: Extracted Offer Details & Live Preview */}
+            {(scrapedProduct || manualTitle || manualImageUrl) && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in slide-in-from-bottom-4 duration-200">
+                {/* Form Section */}
+                <div className="lg:col-span-8 p-6 sm:p-8 rounded-3xl bg-slate-900 border border-slate-800 space-y-6 shadow-xl">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                    <div>
+                      <h4 className="text-lg font-black text-white flex items-center gap-2">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                        <span>Dados Extraídos da Oferta</span>
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Revise e ajuste os campos conforme desejar antes de adicionar à vitrine.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleClearForm}
+                      className="text-xs text-slate-400 hover:text-rose-400 font-bold flex items-center gap-1 transition-colors"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Limpar Tudo</span>
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleCreateProductToVitrine} className="space-y-5">
+                    {/* Title */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                        <Tag className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Título do Produto *</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={manualTitle}
+                        onChange={(e) => setManualTitle(e.target.value)}
+                        className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
+                      />
+                    </div>
+
+                    {/* Price & Original Price */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center gap-1.5">
+                          <DollarSign className="w-3.5 h-3.5" />
+                          <span>Preço Promocional (R$) *</span>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={manualPrice}
+                          onChange={(e) => setManualPrice(e.target.value)}
+                          className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/40 text-sm font-black text-amber-400 focus:outline-none focus:border-amber-400 transition-colors"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 mb-1.5 flex items-center gap-1.5">
+                          <DollarSign className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Preço Original / "De" (R$) <span className="text-[10px] font-normal text-slate-500">(Opcional)</span></span>
+                        </label>
+                        <input
+                          type="text"
+                          value={manualOriginalPrice}
+                          onChange={(e) => setManualOriginalPrice(e.target.value)}
+                          className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-slate-300 focus:outline-none focus:border-amber-400 transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Image URL */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                        <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+                        <span>URL da Imagem em Alta Resolução *</span>
+                      </label>
+                      <input
+                        type="url"
+                        required
+                        value={manualImageUrl}
+                        onChange={(e) => setManualImageUrl(e.target.value)}
+                        className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 font-mono transition-colors shadow-inner"
+                      />
+                    </div>
+
+                    {/* Affiliate Link */}
+                    <div>
+                      <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <LinkIcon className="w-3.5 h-3.5" />
+                          <span>Link de Afiliado Encurtado (Destino de Compra) *</span>
+                        </span>
+                        {manualAffiliateUrl && (
+                          <a
+                            href={manualAffiliateUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] text-amber-400 hover:underline flex items-center gap-1"
+                          >
+                            <span>Testar Link</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                      </label>
+                      <input
+                        type="url"
+                        required
+                        value={manualAffiliateUrl}
+                        onChange={(e) => setManualAffiliateUrl(e.target.value)}
+                        className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-amber-500/50 text-xs text-white focus:outline-none focus:border-amber-400 font-mono transition-colors shadow-inner"
+                      />
+                    </div>
+
+                    {/* Category & Free Shipping */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                          Categoria da Vitrine
+                        </label>
+                        <select
+                          value={manualCategoryId}
+                          onChange={(e) => setManualCategoryId(e.target.value)}
+                          className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 transition-colors"
+                        >
+                          {CATEGORIES_TREE.map(cat => (
+                            <option key={cat.id} value={cat.id}>{cat.name}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                          Opções de Entrega
+                        </label>
+                        <label className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={manualFreeShipping}
+                            onChange={(e) => setManualFreeShipping(e.target.checked)}
+                            className="w-4 h-4 accent-amber-400 rounded"
+                          />
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
+                            <Truck className="w-4 h-4 text-emerald-400" />
+                            <span>Destacar como Frete Grátis</span>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center gap-3">
+                      <button
+                        type="submit"
+                        disabled={isSubmitting}
+                        className="flex-1 py-3.5 px-6 rounded-2xl font-black text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-sm shadow-xl shadow-amber-400/20"
+                      >
+                        {isSubmitting ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-4 h-4" />
+                        )}
+                        <span>{isSubmitting ? 'Publicando...' : 'Adicionar à Vitrine'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleSaveAsDraft}
+                        disabled={isSubmitting}
+                        className="py-3.5 px-5 rounded-2xl font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 active:scale-98 disabled:opacity-50 transition-all flex items-center gap-2 text-xs"
+                      >
+                        <Layers className="w-4 h-4 text-amber-400" />
+                        <span>Salvar como Rascunho</span>
+                      </button>
+                    </div>
+                  </form>
                 </div>
 
-                {/* Simulated Vitrine Card */}
-                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 shadow-2xl">
-                  <div className="relative aspect-square rounded-xl bg-slate-900 overflow-hidden flex items-center justify-center p-2 border border-slate-800/80">
-                    {manualImageUrl ? (
-                      <img
-                        src={manualImageUrl}
-                        alt="Preview"
-                        className="max-h-full max-w-full object-contain"
-                        onError={(e) => {
-                          (e.target as HTMLElement).style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      <div className="text-center p-4 space-y-2 text-slate-600">
-                        <ImageIcon className="w-10 h-10 mx-auto stroke-1" />
-                        <p className="text-[11px]">Cole a URL da imagem para visualizar a foto aqui</p>
-                      </div>
-                    )}
-
-                    {manualFreeShipping && (
-                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/90 text-emerald-400 text-[10px] font-bold border border-emerald-800 flex items-center gap-1">
-                        <Truck className="w-3 h-3" />
-                        <span>Frete Grátis</span>
+                {/* Live Preview Card */}
+                <div className="lg:col-span-4 space-y-4">
+                  <div className="p-4 rounded-3xl bg-slate-900 border border-slate-800">
+                    <div className="flex items-center justify-between mb-3 px-1">
+                      <span className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
+                        <Eye className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Prévia na Vitrine</span>
                       </span>
-                    )}
-
-                    {previewDiscount > 0 && (
-                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black shadow-md">
-                        -{previewDiscount}%
+                      <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-800">
+                        Mercado Livre
                       </span>
-                    )}
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
-                      Mercado Livre Oficial
-                    </span>
-                    <h4 className="text-xs font-bold text-white line-clamp-2 leading-snug">
-                      {manualTitle || 'Título do Produto aparecerá aqui...'}
-                    </h4>
-
-                    <div className="pt-2 flex items-baseline gap-2">
-                      <span className="text-lg font-black text-amber-400">
-                        R$ {parsedPrice > 0 ? parsedPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}
-                      </span>
-                      {parsedOriginalPrice > parsedPrice && (
-                        <span className="text-xs text-slate-500 line-through">
-                          R$ {parsedOriginalPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                        </span>
-                      )}
                     </div>
-                  </div>
 
-                  <div className="pt-2 border-t border-slate-800">
-                    <div className="w-full py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-md">
-                      <span>Ver no Mercado Livre</span>
-                      <ExternalLink className="w-3.5 h-3.5" />
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 shadow-2xl">
+                      <div className="relative aspect-square rounded-xl bg-slate-900 overflow-hidden flex items-center justify-center p-2 border border-slate-800/80">
+                        {manualImageUrl ? (
+                          <img
+                            src={manualImageUrl}
+                            alt="Preview"
+                            className="max-h-full max-w-full object-contain"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <div className="text-center p-4 space-y-2 text-slate-600">
+                            <ImageIcon className="w-10 h-10 mx-auto stroke-1" />
+                            <p className="text-[11px]">Imagem do produto aparecerá aqui</p>
+                          </div>
+                        )}
+
+                        {manualFreeShipping && (
+                          <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/90 text-emerald-400 text-[10px] font-bold border border-emerald-800 flex items-center gap-1">
+                            <Truck className="w-3 h-3" />
+                            <span>Frete Grátis</span>
+                          </span>
+                        )}
+
+                        {previewDiscount > 0 && (
+                          <span className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black shadow-md">
+                            -{previewDiscount}%
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
+                          Mercado Livre Oficial
+                        </span>
+                        <h4 className="text-xs font-bold text-white line-clamp-2 leading-snug">
+                          {manualTitle || 'Título do Produto...'}
+                        </h4>
+
+                        <div className="pt-2 flex items-baseline gap-2">
+                          <span className="text-lg font-black text-amber-400">
+                            R$ {parsedPrice > 0 ? parsedPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}
+                          </span>
+                          {parsedOriginalPrice > parsedPrice && (
+                            <span className="text-xs text-slate-500 line-through">
+                              R$ {parsedOriginalPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-800">
+                        <div className="w-full py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-md">
+                          <span>Ver no Mercado Livre</span>
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -892,14 +989,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <Layers className="w-10 h-10 text-slate-600 mx-auto" />
                 <h4 className="text-base font-bold text-white">Nenhum rascunho pendente</h4>
                 <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                  Você pode cadastrar produtos diretamente para a vitrine ou salvá-los como rascunho na aba Cadastrar Produto.
+                  Cole o texto do painel de Afiliados na aba principal para gerar novas ofertas instantâneas.
                 </p>
                 <button
                   onClick={() => setActiveTab('create')}
                   className="px-5 py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs inline-flex items-center gap-2 shadow-lg shadow-amber-400/20 mt-2"
                 >
-                  <PlusCircle className="w-3.5 h-3.5" />
-                  <span>Cadastrar Novo Produto</span>
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>Gerar Nova Oferta</span>
                 </button>
               </div>
             ) : (
