@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { KeyLogo } from './KeyLogo';
 import { 
   supabase, 
@@ -89,10 +89,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [draftsLoading, setDraftsLoading] = useState(false);
   const [publishedProducts, setPublishedProducts] = useState<Product[]>([]);
 
-  // Comparator Search & Selection state
-  const [searchProductQuery, setSearchProductQuery] = useState('');
-  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  // Autocomplete Search states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<Product[]>([]);
   const [selectedExistingProduct, setSelectedExistingProduct] = useState<Product | null>(null);
+  const searchDropdownRef = useRef<HTMLDivElement>(null);
 
   // Edit Mode state
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
@@ -140,6 +141,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       mounted = false;
       subscription.unsubscribe();
     };
+  }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchDropdownRef.current && !searchDropdownRef.current.contains(event.target as Node)) {
+        setSuggestions([]);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   const loadDraftsAndProducts = async () => {
@@ -229,10 +241,58 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const currentParsedPrice = parseNum(manualPrice);
   const calculatedDiscount = calcDiscountPercent(currentParsedOriginalPrice, currentParsedPrice);
 
+  // Real-time search and filter existing products
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setSearchQuery(value);
+
+    if (!value.trim()) {
+      setSuggestions([]);
+      setSelectedExistingProduct(null);
+      return;
+    }
+
+    const term = value.toLowerCase();
+    const matches = publishedProducts.filter(
+      (p) =>
+        p.title.toLowerCase().includes(term) ||
+        p.brand?.toLowerCase().includes(term) ||
+        p.categoryName?.toLowerCase().includes(term)
+    );
+
+    setSuggestions(matches);
+
+    // If user modifies text, reset selection unless it matches title
+    if (selectedExistingProduct && selectedExistingProduct.title !== value) {
+      setSelectedExistingProduct(null);
+    }
+  };
+
+  // Select an existing product suggestion
+  const handleSelectSuggestion = (prod: Product) => {
+    setSearchQuery(prod.title);
+    setSelectedExistingProduct(prod);
+    setSuggestions([]); // Fecha o dropdown
+    setEditingProductId(null);
+
+    // Default to a different popular store for multi-store comparison
+    const existingStores = prod.offers?.map(o => o.storeName.toLowerCase()) || [];
+    const nextStore = POPULAR_STORES.find(s => !existingStores.includes(s.name.toLowerCase()))?.name || 'Amazon';
+    setManualStoreName(nextStore);
+
+    setManualOriginalPrice('');
+    setManualPrice('');
+    setManualAffiliateUrl('');
+    setManualFreeShipping(true);
+
+    showFeedback('success', `Produto "${prod.title.slice(0, 30)}..." selecionado. Preencha os dados da nova loja.`);
+  };
+
   // Clear Form inputs
   const handleClearForm = () => {
     setSelectedExistingProduct(null);
-    setSearchProductQuery('');
+    setSearchQuery('');
+    setSuggestions([]);
     setEditingProductId(null);
     setManualTitle('');
     setManualStoreName('Mercado Livre');
@@ -242,27 +302,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setManualAffiliateUrl('');
     setManualFreeShipping(true);
   };
-
-  // Select an existing product from search
-  const handleSelectExistingProduct = (prod: Product) => {
-    setSelectedExistingProduct(prod);
-    setSearchProductQuery(prod.title);
-    setIsSearchFocused(false);
-    setEditingProductId(null);
-    setManualStoreName('Amazon');
-    setManualOriginalPrice('');
-    setManualPrice('');
-    setManualAffiliateUrl('');
-    showFeedback('success', `Produto "${prod.title.slice(0, 30)}..." selecionado para adicionar nova loja.`);
-  };
-
-  // Filter products for autocomplete search
-  const matchingProducts = searchProductQuery.trim().length > 1
-    ? publishedProducts.filter(p => 
-        p.title.toLowerCase().includes(searchProductQuery.toLowerCase()) ||
-        p.brand.toLowerCase().includes(searchProductQuery.toLowerCase())
-      ).slice(0, 6)
-    : [];
 
   // Submit Form: Add Offer to Existing Product OR Save New Draft OR Update Published Product
   const handleSubmitForm = async (e: React.FormEvent) => {
@@ -392,6 +431,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleEditPublishedProduct = (product: Product) => {
     const primaryOffer = product.offers[0];
     setSelectedExistingProduct(null);
+    setSearchQuery('');
+    setSuggestions([]);
     setEditingProductId(product.id);
     setManualTitle(product.title);
     setManualStoreName(primaryOffer?.storeName || product.bestStore || 'Mercado Livre');
@@ -409,7 +450,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Quick action from Published list to Add Another Store Offer
   const handleAddStoreOfferToProduct = (product: Product) => {
     setSelectedExistingProduct(product);
-    setSearchProductQuery(product.title);
+    setSearchQuery(product.title);
+    setSuggestions([]);
     setEditingProductId(null);
     setManualStoreName('Amazon');
     setManualOriginalPrice('');
@@ -735,27 +777,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </button>
         </div>
 
-        {/* TAB 1: COMPARATOR FORM WITH AUTOCOMPLETE & MULTI-STORE OFFER PUSH */}
+        {/* TAB 1: COMPARATOR FORM WITH AUTOCOMPLETE (SEARCHQUERY & SUGGESTIONS) */}
         {activeTab === 'create' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-150">
             {/* Form Section */}
             <div className="lg:col-span-8 p-6 sm:p-8 rounded-3xl bg-slate-900 border border-slate-800 space-y-6 shadow-xl">
               
-              {/* Autocomplete Search for Existing Products (Avoiding duplicates) */}
-              <div className="space-y-2 pb-5 border-b border-slate-800 relative">
+              {/* Autocomplete Search for Existing Products */}
+              <div ref={searchDropdownRef} className="space-y-2 pb-5 border-b border-slate-800 relative">
                 <div className="flex items-center justify-between">
                   <label className="block text-xs font-bold text-slate-200 flex items-center gap-1.5">
                     <Search className="w-3.5 h-3.5 text-amber-400" />
-                    <span>1. Verificar se o produto já existe (Comparador de Preços)</span>
+                    <span>Buscar produto existente na Vitrine</span>
                   </label>
-                  {selectedExistingProduct && (
+                  {(searchQuery || selectedExistingProduct) && (
                     <button
                       type="button"
-                      onClick={() => setSelectedExistingProduct(null)}
-                      className="text-[11px] text-rose-400 hover:underline flex items-center gap-1"
+                      onClick={handleClearForm}
+                      className="text-[11px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 transition-colors"
                     >
                       <X className="w-3 h-3" />
-                      <span>Cadastrar como Novo Produto</span>
+                      <span>Limpar busca / Cadastrar Produto Novo</span>
                     </button>
                   )}
                 </div>
@@ -763,57 +805,66 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <div className="relative">
                   <input
                     type="text"
-                    value={searchProductQuery}
-                    onChange={(e) => {
-                      setSearchProductQuery(e.target.value);
-                      if (selectedExistingProduct && e.target.value !== selectedExistingProduct.title) {
-                        setSelectedExistingProduct(null);
-                      }
-                    }}
-                    onFocus={() => setIsSearchFocused(true)}
-                    placeholder="Buscar produto existente na vitrine... (Ex: iPhone 15, JBL 510BT, TV Samsung...)"
-                    className="w-full pl-10 pr-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
+                    value={searchQuery}
+                    onChange={handleSearchChange}
+                    placeholder="Buscar produto existente... (Digite o nome do produto)"
+                    className="w-full pl-10 pr-10 py-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors shadow-inner"
                   />
-                  <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5" />
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-4" />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={handleClearForm}
+                      className="absolute right-3.5 top-3.5 p-1 rounded-lg text-slate-500 hover:text-white transition-colors"
+                      title="Limpar campo de busca"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
 
-                {/* Autocomplete dropdown */}
-                {isSearchFocused && matchingProducts.length > 0 && !selectedExistingProduct && (
-                  <div className="absolute top-full left-0 right-0 z-30 mt-2 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden divide-y divide-slate-800 max-h-72 overflow-y-auto animate-in fade-in zoom-in-95 duration-100">
-                    <div className="p-2.5 bg-slate-950/80 text-[11px] text-amber-400 font-bold flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>Produtos encontrados na Vitrine (Clique para vincular nova loja):</span>
+                {/* Floating Autocomplete Dropdown */}
+                {suggestions.length > 0 && !selectedExistingProduct && (
+                  <div className="absolute top-full left-0 right-0 z-30 mt-2 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-2xl shadow-2xl overflow-hidden divide-y divide-gray-100 dark:divide-slate-800 max-h-80 overflow-y-auto animate-in fade-in zoom-in-95 duration-100">
+                    <div className="px-4 py-2 bg-gray-50 dark:bg-slate-950/80 text-[11px] text-amber-600 dark:text-amber-400 font-bold flex items-center justify-between border-b border-gray-100 dark:border-slate-800">
+                      <span className="flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>{suggestions.length} produto(s) encontrado(s):</span>
+                      </span>
+                      <span className="text-[10px] text-gray-400">Clique para selecionar</span>
                     </div>
-                    {matchingProducts.map((prod) => (
+
+                    {suggestions.map((prod) => (
                       <div
                         key={prod.id}
-                        onMouseDown={() => handleSelectExistingProduct(prod)}
-                        className="p-3 hover:bg-slate-800/80 flex items-center gap-3.5 cursor-pointer transition-colors"
+                        onClick={() => handleSelectSuggestion(prod)}
+                        className="p-3.5 hover:bg-amber-50/80 dark:hover:bg-slate-800/80 flex items-center gap-3.5 cursor-pointer transition-colors group"
                       >
-                        <div className="w-10 h-10 rounded-lg bg-white p-1 flex items-center justify-center shrink-0 shadow-sm border border-slate-700">
+                        <div className="w-12 h-12 rounded-xl bg-white p-1 flex items-center justify-center shrink-0 shadow-sm border border-gray-200 dark:border-slate-700">
                           <img
                             src={prod.imageUrl}
                             alt={prod.title}
                             className="max-h-full max-w-full object-contain"
                           />
                         </div>
+
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-bold text-white truncate">{prod.title}</p>
+                          <p className="text-xs font-bold text-gray-900 dark:text-white truncate group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">
+                            {prod.title}
+                          </p>
                           <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-[10px] text-emerald-400 font-bold">
-                              Menor: R$ {prod.minPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-extrabold">
+                              Menor Preço: R$ {prod.minPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                             </span>
-                            <span className="text-[10px] text-slate-400">
+                            <span className="text-[10px] text-gray-400 dark:text-slate-400">
                               • {prod.offers?.length || 1} loja(s) vinculada(s)
                             </span>
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          className="px-2.5 py-1 rounded-lg bg-amber-400 text-slate-950 text-[10px] font-black shrink-0"
-                        >
-                          + Oferta
-                        </button>
+
+                        <div className="px-3 py-1.5 rounded-xl bg-amber-400 text-slate-950 text-[11px] font-black shrink-0 group-hover:bg-amber-300 transition-colors shadow-sm">
+                          + Adicionar Loja
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -833,29 +884,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </div>
                     <div className="min-w-0">
                       <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-emerald-500 text-slate-950 uppercase tracking-wider">
-                        Produto Existente Selecionado
+                        Produto Vinculado
                       </span>
                       <h4 className="text-xs font-bold text-white truncate mt-1">
                         {selectedExistingProduct.title}
                       </h4>
                       <p className="text-[11px] text-emerald-300">
-                        Preencha os dados abaixo para adicionar uma nova loja a este comparador.
+                        Preencha apenas os dados da nova loja abaixo para expandir o comparador de preços deste produto.
                       </p>
                     </div>
                   </div>
 
                   <button
                     type="button"
-                    onClick={() => setSelectedExistingProduct(null)}
+                    onClick={() => handleClearForm()}
                     className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white text-xs font-bold transition-colors shrink-0"
-                    title="Desvincular"
+                    title="Desvincular e cadastrar novo produto"
                   >
                     <X className="w-4 h-4" />
                   </button>
                 </div>
               )}
 
-              {/* Header Title of Section */}
+              {/* Section Subtitle */}
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-lg font-black text-white flex items-center gap-2">
@@ -868,10 +919,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     )}
                     <span>
                       {selectedExistingProduct 
-                        ? 'Dados da Nova Oferta / Loja' 
+                        ? 'Campos da Nova Oferta / Loja' 
                         : editingProductId 
                           ? 'Editar Produto Publicado' 
-                          : 'Dados do Novo Produto & Oferta'}
+                          : 'Campos do Novo Produto & Oferta'}
                     </span>
                   </h3>
                 </div>
@@ -883,13 +934,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     className="text-xs text-slate-400 hover:text-rose-400 font-bold flex items-center gap-1 transition-colors"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Limpar Tudo</span>
+                    <span>Limpar Formulário</span>
                   </button>
                 )}
               </div>
 
               <form onSubmit={handleSubmitForm} className="space-y-5">
-                {/* 2. Título & Imagem (Ocultos se o produto já existir e estiver selecionado) */}
+                {/* Título & Imagem (Ocultos se o produto já existir e estiver selecionado) */}
                 {!selectedExistingProduct && (
                   <>
                     <div>
@@ -924,7 +975,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </>
                 )}
 
-                {/* 3. Loja da Oferta (Nome da Loja) */}
+                {/* Loja da Oferta (Nome da Loja) */}
                 <div className="space-y-2">
                   <label className="block text-xs font-bold text-slate-200 flex items-center gap-1.5">
                     <StoreIcon className="w-3.5 h-3.5 text-amber-400" />
@@ -958,7 +1009,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   />
                 </div>
 
-                {/* 4. Preço Original / De (R$) ANTES do Preço Promocional */}
+                {/* Preço Original / De (R$) ANTES do Preço Promocional */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
@@ -998,7 +1049,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </div>
                 </div>
 
-                {/* 5. Link de Afiliado da Loja */}
+                {/* Link de Afiliado da Loja */}
                 <div>
                   <label className="block text-xs font-bold text-amber-400 mb-1.5 flex items-center justify-between">
                     <span className="flex items-center gap-1.5">
@@ -1027,7 +1078,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   />
                 </div>
 
-                {/* Category & Free Shipping */}
+                {/* Categoria & Frete Grátis (Exibidos apenas para produto novo) */}
                 {!selectedExistingProduct && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                     <div>
