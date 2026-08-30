@@ -649,3 +649,107 @@ export const updatePublishedProduct = async (productId: string, data: Partial<Cr
 
   return updatedProduct;
 };
+
+export interface AddOfferInput {
+  productId: string;
+  storeName: string;
+  storeId?: StoreId;
+  price: number;
+  originalPrice?: number;
+  affiliateUrl: string;
+  freeShipping?: boolean;
+}
+
+/**
+ * Adds or updates a store offer for an existing product (Comparator architecture)
+ */
+export const addOfferToExistingProduct = async (data: AddOfferInput): Promise<Product> => {
+  await requireAuthSession();
+  const now = new Date().toISOString();
+  
+  const existingProducts = await fetchLiveDatabaseProducts();
+  const product = existingProducts.find(p => p.id === data.productId);
+  if (!product) {
+    throw new Error('Produto selecionado não encontrado na base de dados.');
+  }
+
+  const storeName = data.storeName.trim() || 'Mercado Livre';
+  const rawId = storeName.toLowerCase().replace(/\s+/g, '');
+  let storeId: StoreId = 'mercadolivre';
+  if (rawId.includes('amazon')) storeId = 'amazon';
+  else if (rawId.includes('shopee')) storeId = 'shopee';
+  else if (rawId.includes('magalu') || rawId.includes('magazine')) storeId = 'magalu';
+  else if (rawId.includes('kabum')) storeId = 'kabum';
+  else if (rawId.includes('mercado') || rawId.includes('ml')) storeId = 'mercadolivre';
+
+  const promoPrice = Number(data.price);
+  const origPrice = data.originalPrice && data.originalPrice > promoPrice 
+    ? Number(data.originalPrice) 
+    : Math.round(promoPrice * 1.15);
+  const discountPercent = Math.max(5, Math.round(((origPrice - promoPrice) / origPrice) * 100));
+
+  const newOffer: StoreOffer = {
+    id: `off-${storeId}-${Date.now()}`,
+    storeId,
+    storeName,
+    storeLogo: storeId === 'mercadolivre' 
+      ? 'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=100&auto=format&fit=crop&q=80'
+      : storeId === 'amazon'
+      ? 'https://images.unsplash.com/photo-1523474253243-283a0ed81406?w=100&auto=format&fit=crop&q=80'
+      : 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=100&auto=format&fit=crop&q=80',
+    price: promoPrice,
+    originalPrice: origPrice,
+    discountPercent,
+    currency: 'BRL',
+    affiliateUrl: data.affiliateUrl.trim(),
+    inStock: true,
+    freeShipping: data.freeShipping ?? true,
+    installment: '10x sem juros',
+    rating: 4.9,
+    reviewsCount: 100,
+    lastUpdated: 'Agora',
+  };
+
+  // Replace existing store offer or append
+  const existingOffers = product.offers || [];
+  const otherOffers = existingOffers.filter(o => o.storeName.toLowerCase() !== storeName.toLowerCase());
+  const updatedOffers = [...otherOffers, newOffer].sort((a, b) => a.price - b.price);
+
+  const bestOffer = updatedOffers[0];
+  const minPrice = bestOffer.price;
+  const maxPrice = Math.max(...updatedOffers.map(o => o.originalPrice || o.price));
+
+  const updatedProduct: Product = {
+    ...product,
+    minPrice,
+    maxPrice,
+    bestStore: bestOffer.storeName,
+    bestStoreId: bestOffer.storeId,
+    offers: updatedOffers,
+    updatedAt: now,
+  };
+
+  if (isSupabaseConfigured) {
+    try {
+      await supabase
+        .from('products')
+        .update({
+          min_price: updatedProduct.minPrice,
+          max_price: updatedProduct.maxPrice,
+          best_store: updatedProduct.bestStore,
+          best_store_id: updatedProduct.bestStoreId,
+          offers: updatedProduct.offers,
+          updated_at: now,
+        })
+        .eq('id', product.id);
+    } catch (err) {
+      console.warn('Supabase update product with new offer exception:', err);
+    }
+  }
+
+  const customProducts = getStoredCustomProducts();
+  const filtered = customProducts.filter(p => p.id !== product.id);
+  saveStoredCustomProducts([updatedProduct, ...filtered]);
+
+  return updatedProduct;
+};
