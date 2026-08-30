@@ -64,33 +64,66 @@ const requireAuthSession = async (): Promise<string> => {
 };
 
 /**
- * Searches Mercado Livre products via backend Serverless Function (/api/search) with OAuth authentication
+ * Searches the public Mercado Livre API directly on the client side using JSONP
+ * to bypass CORS restrictions and datacenter IP blocks.
  */
-export const searchMercadoLivreAPI = async (query: string): Promise<MercadoLivreSearchResult[]> => {
-  if (!query.trim()) return [];
-  try {
-    const url = `/api/search?q=${encodeURIComponent(query.trim())}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      const errorJson = await res.json().catch(() => ({}));
-      throw new Error(errorJson.error || `Erro na busca do Mercado Livre: status ${res.status}`);
-    }
-    const data = await res.json();
-    
-    return (data.results || []).map((item: any) => ({
-      id: item.id,
-      title: item.title,
-      price: item.price || 0,
-      original_price: item.original_price || null,
-      thumbnail: item.thumbnail ? item.thumbnail.replace('http://', 'https://').replace('-I.jpg', '-O.webp') : '',
-      permalink: item.permalink || `https://produto.mercadolivre.com.br/MLB-${item.id}`,
-      shipping: { free_shipping: Boolean(item.shipping?.free_shipping) },
-      condition: item.condition || 'new',
-    }));
-  } catch (err: any) {
-    console.error('Erro ao buscar produtos do Mercado Livre via /api/search:', err);
-    throw err;
-  }
+export const searchMercadoLivreAPI = (query: string): Promise<MercadoLivreSearchResult[]> => {
+  if (!query.trim()) return Promise.resolve([]);
+
+  return new Promise((resolve, reject) => {
+    const callbackName = `ml_jsonp_cb_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const script = document.createElement('script');
+
+    const cleanup = () => {
+      if (document.body.contains(script)) {
+        document.body.removeChild(script);
+      }
+      delete (window as any)[callbackName];
+    };
+
+    // Timeout guard (10 seconds)
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error('Tempo limite esgotado ao consultar o Mercado Livre via JSONP.'));
+    }, 10000);
+
+    // Define global callback handler
+    (window as any)[callbackName] = (data: any) => {
+      clearTimeout(timeoutId);
+      cleanup();
+
+      if (!data) {
+        return resolve([]);
+      }
+
+      // Support direct results or wrapped Mercado Livre JSONP format: [status, headers, body]
+      const results = Array.isArray(data) && data.length > 2 && data[2]?.results
+        ? data[2].results
+        : (data.results || (Array.isArray(data) ? data : []));
+
+      const mapped: MercadoLivreSearchResult[] = results.map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        price: item.price || 0,
+        original_price: item.original_price || null,
+        thumbnail: item.thumbnail ? item.thumbnail.replace('http://', 'https://').replace('-I.jpg', '-O.webp') : '',
+        permalink: item.permalink || `https://produto.mercadolivre.com.br/MLB-${item.id}`,
+        shipping: { free_shipping: Boolean(item.shipping?.free_shipping) },
+        condition: item.condition || 'new',
+      }));
+
+      resolve(mapped);
+    };
+
+    script.onerror = () => {
+      clearTimeout(timeoutId);
+      cleanup();
+      reject(new Error('Falha ao carregar script JSONP do Mercado Livre.'));
+    };
+
+    script.src = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(query.trim())}&callback=${callbackName}`;
+    document.body.appendChild(script);
+  });
 };
 
 /**
