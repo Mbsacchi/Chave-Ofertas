@@ -294,7 +294,7 @@ function mapRowToProduct(row: any) {
 /**
  * Função de processamento assíncrono em stream (Fire-and-Forget / Background Worker)
  */
-async function processAwinStreamSync(supabase: any, maxLimit = 0) {
+export async function processAwinStreamSync(supabase: any, maxLimit = 0) {
   const startTime = Date.now();
   console.log(`================================================================`);
   console.log(`🚀 [AWIN ASYNC WORKER] Iniciando Processamento em Background`);
