@@ -1,6 +1,13 @@
 /**
  * Sistema de Mapeamento Inteligente de Categorias por Expressões Regulares (Regex)
  * Prioriza palavras-chave no TÍTULO do produto sobre categorias genéricas do feed da loja.
+ * Nomes e IDs 100% alinhados com o frontend (CATEGORIES_TREE):
+ * - audio -> 'Áudio & Som'
+ * - smartphones -> 'Smartphones & Celulares'
+ * - informatica -> 'Informática & Notebooks'
+ * - games -> 'Games e Consoles'
+ * - eletro -> 'Eletro & Casa'
+ * - livros -> 'Livros'
  */
 
 export interface CategoryRule {
@@ -12,10 +19,9 @@ export interface CategoryRule {
 
 /**
  * Tabela de Regras Extensível
- * Adicione novas categorias ou palavras-chave adicionando novos padrões Regex abaixo.
  */
 export const CATEGORY_MAPPING_RULES: CategoryRule[] = [
-  // 1. ÁUDIO & SOM (Prioridade máxima para fones, headsets e caixas de som)
+  // 1. ÁUDIO & SOM (Prioridade máxima para fones, headsets, caixas de som)
   {
     id: 'audio',
     name: 'Áudio & Som',
@@ -65,31 +71,20 @@ export const CATEGORY_MAPPING_RULES: CategoryRule[] = [
     ],
   },
 
-  // 5. CASA & ELETRODOMÉSTICOS
+  // 5. ELETRO & CASA
   {
-    id: 'casa',
-    name: 'Casa & Eletrodomésticos',
+    id: 'eletro',
+    name: 'Eletro & Casa',
     titlePatterns: [
       /\b(airfryer|air fryer|fritadeira|aspirador|aspirador rob[ôo]|cafeteira|nespresso|dolce gusto|micro-ondas|microondas|geladeira|refrigerador|fog[ãa]o|cooktop|lavadora|lava e seca|m[áa]quina de lavar|liquidificador|batedeira|ventilador|ar-condicionado|climatizador|ferro de passar|purificador de [áa]gua|panela el[ée]trica)\b/i,
-    ],
-    categoryPatterns: [
-      /\b(casa|eletrodom[ée]stico|eletrodom[ée]sticos|cozinha|eletro)\b/i,
-    ],
-  },
-
-  // 6. TV & VÍDEO / ELETRÔNICOS
-  {
-    id: 'eletronicos',
-    name: 'TV & Eletrônicos',
-    titlePatterns: [
       /\b(smart tv|tv|televis[ãa]o|televisor|oled|qled|nanocell|crystal uhd|projetor|chromecast|fire tv|fire stick|roku|apple tv|home theater)\b/i,
     ],
     categoryPatterns: [
-      /\b(tv|televis[ãa]o|v[íi]deo|eletr[ôo]nico|eletr[ôo]nicos)\b/i,
+      /\b(casa|eletrodom[ée]stico|eletrodom[ée]sticos|cozinha|eletro|tv|televis[ãa]o|v[íi]deo)\b/i,
     ],
   },
 
-  // 7. LIVROS
+  // 6. LIVROS
   {
     id: 'livros',
     name: 'Livros',
@@ -113,7 +108,7 @@ export function resolveSmartCategory(
   const title = (productName || '').trim();
   const rawCat = `${catName || ''} ${merchCat || ''}`.trim();
 
-  // ETAPA 1: Prioridade MÁXIMA no TÍTULO do produto
+  // ETAPA 1: Prioridade MÁXIMA no TÍTULO do produto (Regex)
   if (title) {
     for (const rule of CATEGORY_MAPPING_RULES) {
       for (const pattern of rule.titlePatterns) {
@@ -137,13 +132,6 @@ export function resolveSmartCategory(
     }
   }
 
-  // ETAPA 3: Fallback final com a categoria literal do feed ou Padrão
-  if (catName && catName.trim()) {
-    return { categoryId: 'eletronicos', categoryName: catName.trim() };
-  }
-  if (merchCat && merchCat.trim()) {
-    return { categoryId: 'eletronicos', categoryName: merchCat.trim() };
-  }
-
-  return { categoryId: 'eletronicos', categoryName: 'Eletrônicos & Tecnologia' };
+  // ETAPA 3: Fallback padrão garantido
+  return { categoryId: 'smartphones', categoryName: 'Smartphones & Celulares' };
 }
