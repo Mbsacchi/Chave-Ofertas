@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "sync:awin": "node scripts/sync-awin-feed.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
     "clsx": "^2.1.1",
+    "csv-parser": "^3.2.1",
     "dompurify": "^3.1.6",
     "firebase": "^10.12.5",
     "fuse.js": "^7.5.0",

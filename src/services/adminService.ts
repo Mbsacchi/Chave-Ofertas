@@ -960,6 +960,7 @@ export const syncAwinOffers = async (): Promise<{ count: number; products: Produ
     const res = await fetch('/api/awin-sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 1000 }),
     });
 
     const text = await res.text();
