@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
+    "@vercel/functions": "^3.9.5",
     "clsx": "^2.1.1",
     "csv-parser": "^3.2.1",
     "dompurify": "^3.1.6",

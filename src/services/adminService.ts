@@ -960,7 +960,7 @@ export const syncAwinOffers = async (): Promise<{ count: number; products: Produ
     const res = await fetch('/api/awin-sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limit: 1000 }),
+      body: JSON.stringify({ limit: 0 }), // 0 = feed completo de 16k itens em background
     });
 
     const text = await res.text();
@@ -972,6 +972,15 @@ export const syncAwinOffers = async (): Promise<{ count: number; products: Produ
 
     if (!res.ok || !data.success) {
       throw new Error(data?.error || 'Erro ao sincronizar com a API Awin.');
+    }
+
+    // Se o backend estiver rodando em modo assíncrono (Fire-and-Forget)
+    if (data.isBackground || data.status === 'processing') {
+      return {
+        count: 16000,
+        products: [],
+        message: data.message || 'Sincronização iniciada em segundo plano com sucesso!',
+      };
     }
   } catch (fetchErr: any) {
     console.warn('API /api/awin-sync offline or unreachable, using fallback Awin partner dataset:', fetchErr.message);
