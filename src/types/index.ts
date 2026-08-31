@@ -51,6 +51,7 @@ export interface Product {
   subcategoryName?: string;
   brand: string;
   sku: string;
+  ean?: string;
   imageUrl: string;
   galleryUrls?: string[];
   searchKeywords: string[];

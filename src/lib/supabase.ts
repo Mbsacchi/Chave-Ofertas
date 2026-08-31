@@ -74,6 +74,7 @@ create table if not exists public.products (
   subcategory_name text,
   brand text not null,
   sku text,
+  ean text,
   image_url text not null,
   search_keywords text[],
   min_price numeric(10,2) not null,
