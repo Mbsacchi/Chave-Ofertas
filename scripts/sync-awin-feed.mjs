@@ -2,14 +2,20 @@ import https from 'https';
 import zlib from 'zlib';
 import csv from 'csv-parser';
 import { createClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+// 1. Injeção global do WebSocket para total compatibilidade com Node.js v18
+if (typeof globalThis.WebSocket === 'undefined') {
+  globalThis.WebSocket = WebSocket;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 1. Carregar variáveis de ambiente do arquivo .env
+// 2. Carregar variáveis de ambiente do arquivo .env
 const envPath = path.resolve(__dirname, '../.env');
 if (fs.existsSync(envPath)) {
   const envContent = fs.readFileSync(envPath, 'utf8');
@@ -36,11 +42,20 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SU
 
 if (!supabaseUrl || !supabaseKey || supabaseKey.includes('placeholder')) {
   console.error('[ERRO] Credenciais do Supabase não configuradas no .env');
-  console.error('Certifique-se de configurar VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no arquivo .env');
+  console.error('Certifique-se de configurar VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY (ou SUPABASE_SERVICE_ROLE_KEY) no arquivo .env');
   process.exit(1);
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+// 3. Inicialização do Supabase com transporte WebSocket para Node 18
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+  realtime: {
+    transport: WebSocket,
+  },
+});
 
 function parsePrice(val) {
   if (!val) return 0;
@@ -232,6 +247,21 @@ async function runWorker() {
   console.log('================================================================');
   console.log('🚀 [AWIN SYNC WORKER] Iniciando Sincronização em Stream do Feed');
   console.log('================================================================');
+
+  // Autenticação opcional se fornecida no .env
+  if (process.env.SUPABASE_ADMIN_EMAIL && process.env.SUPABASE_ADMIN_PASSWORD) {
+    try {
+      console.log(`🔐 Autenticando com ${process.env.SUPABASE_ADMIN_EMAIL}...`);
+      await supabase.auth.signInWithPassword({
+        email: process.env.SUPABASE_ADMIN_EMAIL,
+        password: process.env.SUPABASE_ADMIN_PASSWORD,
+      });
+      console.log('✅ Sessão de escrita autenticada no Supabase.');
+    } catch (e) {
+      console.warn('⚠️ Não foi possível autenticar sessão com login/senha:', e.message);
+    }
+  }
+
   console.log(`📡 Conectando ao Feed Awin compactado (GZIP)...`);
 
   const startTime = Date.now();
@@ -240,78 +270,70 @@ async function runWorker() {
   let batch = [];
   let batchNumber = 0;
 
-  return new Promise((resolve, reject) => {
-    https.get(AWIN_DATAFEED_URL, (response) => {
-      if (response.statusCode !== 200) {
-        return reject(new Error(`Erro HTTP Awin: ${response.statusCode} ${response.statusMessage}`));
-      }
-
-      const gunzip = zlib.createGunzip();
-      const parser = csv({ separator: ',' });
-
-      response.pipe(gunzip).pipe(parser)
-        .on('data', async (row) => {
-          const product = mapRowToProduct(row);
-          if (!product) return;
-
-          totalProcessed++;
-          batch.push(product);
-
-          // Flush em lotes de BATCH_SIZE (500)
-          if (batch.length >= BATCH_SIZE) {
-            batchNumber++;
-            const currentBatch = [...batch];
-            batch = []; // Limpeza de memória imediata
-
-            parser.pause();
-            try {
-              const { error } = await supabase.from('products').upsert(currentBatch, { onConflict: 'id' });
-              if (error) {
-                console.error(`❌ [Lote #${batchNumber}] Erro ao gravar ${currentBatch.length} itens:`, error.message);
-              } else {
-                totalUpserted += currentBatch.length;
-                console.log(`✅ [Lote #${batchNumber}] ${currentBatch.length} produtos gravados no Supabase. Total acumulado: ${totalUpserted}`);
-              }
-            } catch (err) {
-              console.error(`❌ [Lote #${batchNumber}] Exceção no upsert:`, err.message);
-            } finally {
-              parser.resume();
-            }
-          }
-        })
-        .on('end', async () => {
-          // Gravação do último lote restante
-          if (batch.length > 0) {
-            batchNumber++;
-            try {
-              const { error } = await supabase.from('products').upsert(batch, { onConflict: 'id' });
-              if (!error) {
-                totalUpserted += batch.length;
-                console.log(`✅ [Lote Final #${batchNumber}] ${batch.length} produtos gravados. Total acumulado: ${totalUpserted}`);
-              }
-            } catch (err) {
-              console.error(`❌ [Lote Final] Erro:`, err.message);
-            }
-            batch = [];
-          }
-
-          const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-          console.log('================================================================');
-          console.log(`🎉 [CONCLUÍDO COM SUCESSO] Tempo total: ${duration}s`);
-          console.log(`📊 Linhas processadas: ${totalProcessed}`);
-          console.log(`💾 Produtos gravados/atualizados no banco: ${totalUpserted}`);
-          console.log('================================================================');
-          resolve({ totalProcessed, totalUpserted, duration });
-        })
-        .on('error', (err) => {
-          console.error('❌ Erro no stream do CSV/Gzip:', err);
-          reject(err);
-        });
-    }).on('error', (err) => {
-      console.error('❌ Erro na requisição HTTP:', err);
-      reject(err);
-    });
+  const response = await new Promise((resolve, reject) => {
+    https.get(AWIN_DATAFEED_URL, resolve).on('error', reject);
   });
+
+  if (response.statusCode !== 200) {
+    throw new Error(`Erro HTTP Awin: ${response.statusCode} ${response.statusMessage}`);
+  }
+
+  const gunzip = zlib.createGunzip();
+  const parser = csv({ separator: ',' });
+
+  response.pipe(gunzip).pipe(parser);
+
+  for await (const row of parser) {
+    const product = mapRowToProduct(row);
+    if (!product) continue;
+
+    totalProcessed++;
+    batch.push(product);
+
+    // Flush em lotes de BATCH_SIZE (500)
+    if (batch.length >= BATCH_SIZE) {
+      batchNumber++;
+      const currentBatch = [...batch];
+      batch = []; // Limpeza de memória RAM imediata
+
+      try {
+        const { error } = await supabase.from('products').upsert(currentBatch, { onConflict: 'id' });
+        if (error) {
+          console.error(`❌ [Lote #${batchNumber}] Erro ao gravar ${currentBatch.length} itens:`, error.message);
+        } else {
+          totalUpserted += currentBatch.length;
+          console.log(`✅ [Lote #${batchNumber}] ${currentBatch.length} produtos gravados no Supabase. Total acumulado: ${totalUpserted}`);
+        }
+      } catch (err) {
+        console.error(`❌ [Lote #${batchNumber}] Exceção no upsert:`, err.message);
+      }
+    }
+  }
+
+  // Gravação do último lote restante
+  if (batch.length > 0) {
+    batchNumber++;
+    try {
+      const { error } = await supabase.from('products').upsert(batch, { onConflict: 'id' });
+      if (error) {
+        console.error(`❌ [Lote Final] Erro Supabase:`, error.message);
+      } else {
+        totalUpserted += batch.length;
+        console.log(`✅ [Lote Final #${batchNumber}] ${batch.length} produtos gravados. Total acumulado: ${totalUpserted}`);
+      }
+    } catch (err) {
+      console.error(`❌ [Lote Final] Exceção:`, err.message);
+    }
+    batch = [];
+  }
+
+  const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log('================================================================');
+  console.log(`🎉 [CONCLUÍDO COM SUCESSO] Tempo total: ${duration}s`);
+  console.log(`📊 Linhas processadas: ${totalProcessed}`);
+  console.log(`💾 Produtos gravados/atualizados no banco: ${totalUpserted}`);
+  console.log('================================================================');
+  return { totalProcessed, totalUpserted, duration };
 }
 
 runWorker()

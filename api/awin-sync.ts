@@ -2,6 +2,11 @@ import https from 'https';
 import zlib from 'zlib';
 import csv from 'csv-parser';
 import { createClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
+
+if (typeof globalThis.WebSocket === 'undefined') {
+  globalThis.WebSocket = WebSocket as any;
+}
 
 const AWIN_DATAFEED_URL = 
   process.env.AWIN_DATAFEED_URL ||
@@ -215,7 +220,12 @@ export default async function handler(req: any, res: any) {
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
 
   const isSupabaseReady = Boolean(supabaseUrl && supabaseKey && !supabaseKey.includes('placeholder'));
-  const supabase = isSupabaseReady ? createClient(supabaseUrl, supabaseKey) : null;
+  const supabase = isSupabaseReady
+    ? createClient(supabaseUrl, supabaseKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+        realtime: { transport: WebSocket },
+      })
+    : null;
 
   // Parâmetros opcionais (ex: limit=1000 para sincronização rápida pelo browser)
   const maxLimit = req.query?.limit ? parseInt(req.query.limit, 10) : (req.body?.limit ? parseInt(req.body.limit, 10) : 0);
