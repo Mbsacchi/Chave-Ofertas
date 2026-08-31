@@ -38,16 +38,16 @@ const AWIN_DATAFEED_URL =
 const BATCH_SIZE = 500;
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
 
-if (!supabaseUrl || !supabaseKey || supabaseKey.includes('placeholder')) {
+if (!supabaseUrl || !serviceRoleKey) {
   console.error('[ERRO] Credenciais do Supabase não configuradas no .env');
-  console.error('Certifique-se de configurar VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY (ou SUPABASE_SERVICE_ROLE_KEY) no arquivo .env');
+  console.error('Certifique-se de configurar VITE_SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no arquivo .env');
   process.exit(1);
 }
 
-// 3. Inicialização do Supabase com transporte WebSocket para Node 18
-const supabase = createClient(supabaseUrl, supabaseKey, {
+// 3. Inicialização do Supabase com chave Service Role (Admin Bypass RLS) e transporte WebSocket
+const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,
