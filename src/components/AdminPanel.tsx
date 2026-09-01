@@ -143,9 +143,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSessionUser(session?.user || null);
-      if (session?.user) {
-        loadDraftsAndProducts();
-      }
     });
 
     return () => {
@@ -153,6 +150,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       subscription.unsubscribe();
     };
   }, []);
+
+  const isAuthorizedAdmin = Boolean(
+    sessionUser?.email &&
+    ALLOWED_ADMIN_EMAILS.includes(sessionUser.email.trim().toLowerCase())
+  );
+
+  useEffect(() => {
+    if (sessionUser && isAuthorizedAdmin) {
+      loadDraftsAndProducts();
+    }
+  }, [sessionUser, isAuthorizedAdmin]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -705,7 +713,53 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     );
   }
 
-  // LOGIN SCREEN (100% GENERIC & SECURE)
+  // TELA DE ACESSO NEGADO CASO USUÁRIO ESTEJA LOGADO MAS NÃO SEJA ADMINISTRADOR
+  if (sessionUser && !isAuthorizedAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 select-none">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl space-y-6 text-center">
+          <div className="flex justify-center mb-2">
+            <KeyLogo size="md" />
+          </div>
+
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20 mx-auto">
+            <Lock className="w-7 h-7" />
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-xl font-black text-white">Acesso Restrito ao Painel Admin</h2>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              A conta conectada (<strong className="text-white">{sessionUser.email}</strong>) não possui permissões de administrador.
+            </p>
+            <p className="text-[11px] text-slate-500">
+              Você pode continuar navegando e usando a vitrine normalmente com esta conta.
+            </p>
+          </div>
+
+          <div className="pt-2 space-y-2.5">
+            <button
+              type="button"
+              onClick={onBackToVitrine}
+              className="w-full py-3 px-4 rounded-xl font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 transition-all text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-400/20 cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Voltar para a Vitrine de Ofertas</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="w-full py-2.5 px-4 rounded-xl font-semibold text-xs text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800 transition-colors cursor-pointer"
+            >
+              Entrar com outra conta
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // LOGIN SCREEN (QUANDO NÃO HOUVER NENHUMA SESSÃO ATIVA)
   if (!sessionUser) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
@@ -763,7 +817,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
               <button
                 type="submit"
-                className="w-full py-3 px-4 rounded-xl font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 transition-all shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2 text-sm mt-2"
+                className="w-full py-3 px-4 rounded-xl font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 transition-all shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2 text-sm mt-2 cursor-pointer"
               >
                 <Lock className="w-4 h-4" />
                 <span>Entrar no Painel Admin</span>
@@ -773,7 +827,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <button
                   type="button"
                   onClick={onBackToVitrine}
-                  className="hover:text-amber-400 transition-colors flex items-center gap-1.5 font-medium py-1 px-3 rounded-lg hover:bg-slate-800"
+                  className="hover:text-amber-400 transition-colors flex items-center gap-1.5 font-medium py-1 px-3 rounded-lg hover:bg-slate-800 cursor-pointer"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" />
                   <span>Voltar para a Vitrine</span>

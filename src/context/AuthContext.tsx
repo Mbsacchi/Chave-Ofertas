@@ -100,42 +100,66 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let isMounted = true;
 
     // 1. Restaura sessão ativa do Supabase
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
-      if (!isMounted) return;
-      if (!error && session?.user) {
-        const formatted = formatSupabaseUser(session.user);
-        setUser(formatted);
-        localStorage.setItem('chave_user_session', JSON.stringify(formatted));
-      } else if (!localStorage.getItem('chave_user_session')) {
-        setUser(null);
-      }
-      setLoading(false);
-    }).catch(() => {
-      if (isMounted) setLoading(false);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data: { session }, error }) => {
+        if (!isMounted) return;
+        if (!error && session?.user) {
+          const formatted = formatSupabaseUser(session.user);
+          setUser(formatted);
+          localStorage.setItem('chave_user_session', JSON.stringify(formatted));
+        } else if (error || !session) {
+          // Apenas limpa se não houver sessão ativa confirmada no Supabase
+          if (!localStorage.getItem('chave_user_session')) {
+            setUser(null);
+          }
+        }
+        setLoading(false);
+      })
+      .catch(() => {
+        if (isMounted) setLoading(false);
+      });
 
     // 2. Ouvinte de mudanças de estado (Login, Logout, Token Refresh, Storage sync)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (!isMounted) return;
       if (session?.user) {
         const formatted = formatSupabaseUser(session.user);
         setUser(formatted);
         localStorage.setItem('chave_user_session', JSON.stringify(formatted));
         setShowAuthModal(false);
-      } else {
+      } else if (event === 'SIGNED_OUT') {
         setUser(null);
         localStorage.removeItem('chave_user_session');
       }
       setLoading(false);
     });
 
+    // 3. Ouvinte de evento storage para sincronização entre abas/janela popup
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key && e.key.includes('-auth-token')) {
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          if (!isMounted) return;
+          if (session?.user) {
+            const formatted = formatSupabaseUser(session.user);
+            setUser(formatted);
+            localStorage.setItem('chave_user_session', JSON.stringify(formatted));
+          }
+        });
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
     return () => {
       isMounted = false;
       subscription.unsubscribe();
+      window.removeEventListener('storage', handleStorageChange);
     };
   }, []);
 
-  // Login com Google oficial via Supabase OAuth em POPUP (sem recarregar ou redirecionar a aba inteira)
+  // Login com Google oficial via Supabase OAuth em POPUP
   const signInWithGoogle = async (): Promise<void> => {
     if (!isSupabaseConfigured) {
       console.error('Supabase não configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');
@@ -186,7 +210,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return new Promise<void>((resolve) => {
       let isCompleted = false;
 
-      const finishLogin = async () => {
+      const finishLogin = async (incomingSession?: any) => {
         if (isCompleted) return;
         isCompleted = true;
 
@@ -194,9 +218,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (popupInterval) clearInterval(popupInterval);
 
         try {
+          if (incomingSession?.access_token && incomingSession?.refresh_token) {
+            await supabase.auth.setSession({
+              access_token: incomingSession.access_token,
+              refresh_token: incomingSession.refresh_token,
+            });
+          }
+
           const { data: sessionData } = await supabase.auth.getSession();
-          if (sessionData?.session?.user) {
-            const formatted = formatSupabaseUser(sessionData.session.user);
+          const targetUser = incomingSession?.user || sessionData?.session?.user;
+
+          if (targetUser) {
+            const formatted = formatSupabaseUser(targetUser);
             setUser(formatted);
             localStorage.setItem('chave_user_session', JSON.stringify(formatted));
           }
@@ -211,7 +244,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const handleMessage = (event: MessageEvent) => {
         if (event.origin !== window.location.origin) return;
         if (event.data?.type === 'SUPABASE_AUTH_SUCCESS') {
-          finishLogin();
+          finishLogin(event.data.session);
         }
       };
 
@@ -225,7 +258,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (!isCompleted) {
               const { data: sessionData } = await supabase.auth.getSession();
               if (sessionData?.session?.user) {
-                finishLogin();
+                finishLogin(sessionData.session);
               } else {
                 window.removeEventListener('message', handleMessage);
                 resolve();

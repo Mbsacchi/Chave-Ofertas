@@ -12,29 +12,40 @@ export const AuthCallback: React.FC = () => {
 
     const processAuth = async () => {
       try {
-        // O cliente Supabase processa automaticamente o código PKCE ou tokens presentes na URL
-        const { data, error } = await supabase.auth.getSession();
+        let session = null;
 
-        if (error) {
-          console.error('Erro ao recuperar sessão no callback:', error.message);
-          if (isMounted) {
-            setErrorMessage(error.message);
-            setStatus('error');
+        // 1. Se houver código PKCE nos parâmetros de busca (?code=...)
+        const searchParams = new URLSearchParams(window.location.search);
+        const code = searchParams.get('code');
+
+        if (code) {
+          const { data: exData, error: exError } = await supabase.auth.exchangeCodeForSession(code);
+          if (!exError && exData?.session) {
+            session = exData.session;
+          } else if (exError) {
+            console.warn('exchangeCodeForSession notice:', exError.message);
           }
-          return;
+        }
+
+        // 2. Fallback: obter sessão atual (caso implicit flow / tokens no hash)
+        if (!session) {
+          const { data: sData, error: sError } = await supabase.auth.getSession();
+          if (!sError && sData?.session) {
+            session = sData.session;
+          }
         }
 
         if (isMounted) {
           setStatus('success');
         }
 
-        // Notifica a janela principal (opener)
+        // 3. Notifica a janela principal (opener) com os dados da sessão
         if (window.opener) {
           try {
             window.opener.postMessage(
               {
                 type: 'SUPABASE_AUTH_SUCCESS',
-                session: data.session,
+                session: session,
               },
               window.location.origin
             );
@@ -42,20 +53,20 @@ export const AuthCallback: React.FC = () => {
             console.warn('Não foi possível enviar postMessage:', postErr);
           }
 
-          // Fecha a janela popup após uma breve confirmação visual
+          // Fecha a janela popup após breve confirmação
           setTimeout(() => {
             window.close();
-          }, 600);
+          }, 500);
         } else {
-          // Se o usuário abriu diretamente a rota na mesma aba
+          // Se acessado diretamente sem opener
           setTimeout(() => {
             window.location.href = '/';
-          }, 800);
+          }, 600);
         }
       } catch (err: any) {
         console.error('Exceção no processamento do callback:', err);
         if (isMounted) {
-          setErrorMessage(err.message || 'Erro inesperado');
+          setErrorMessage(err.message || 'Erro ao processar autenticação');
           setStatus('error');
         }
       }
