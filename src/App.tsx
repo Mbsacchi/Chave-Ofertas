@@ -22,13 +22,13 @@ import { fetchActiveCoupons } from './services/couponService';
 import { useAuth } from './context/AuthContext';
 import { useBodyScrollLock } from './lib/hooks/useBodyScrollLock';
 import { useHardwareBackNavigation } from './lib/hooks/useHardwareBackNavigation';
-import { 
-  Tag, 
-  Zap, 
-  Heart, 
-  Flame, 
-  ChevronRight, 
-  X, 
+import {
+  Tag,
+  Zap,
+  Heart,
+  Flame,
+  ChevronRight,
+  X,
   SlidersHorizontal,
   ArrowLeft
 } from 'lucide-react';
@@ -129,7 +129,7 @@ export const AppContent: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedSubcategory, setSelectedSubcategory] = useState<string | undefined>(undefined);
-  
+
   // Filter Sidebar State
   const [selectedStores, setSelectedStores] = useState<StoreId[]>([]);
   const [selectedBrands, setSelectedBrands] = useState<string[]>([]);
@@ -316,9 +316,9 @@ export const AppContent: React.FC = () => {
   // If in Admin route, render secure AdminPanel
   if (viewMode === 'admin') {
     return (
-      <AdminPanel 
-        onBackToVitrine={navigateToVitrine} 
-        onProductPublished={handleProductPublished} 
+      <AdminPanel
+        onBackToVitrine={navigateToVitrine}
+        onProductPublished={handleProductPublished}
       />
     );
   }
@@ -326,8 +326,8 @@ export const AppContent: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col bg-gray-50 dark:bg-dark-bg text-gray-900 dark:text-gray-100 transition-colors duration-200">
       {/* 1. Main Header / Navbar */}
-      <Navbar 
-        activeTab={activeTab} 
+      <Navbar
+        activeTab={activeTab}
         onTabChange={setActiveTab}
         onOpenMobileMenu={() => setIsMobileDrawerOpen(true)}
         onLogoClick={handleResetFilters}
@@ -424,7 +424,7 @@ export const AppContent: React.FC = () => {
                   <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 flex-wrap">
                     <button
                       onClick={handleResetFilters}
-                      className="font-bold hover:text-amber-500 transition-colors"
+                      className="font-bold hover:text-amber-500 transition-colors cursor-pointer"
                     >
                       Início
                     </button>
@@ -454,7 +454,7 @@ export const AppContent: React.FC = () => {
                         className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 font-extrabold text-[11px] flex items-center gap-1"
                       >
                         <span>{brand}</span>
-                        <button onClick={() => handleToggleBrand(brand)}>
+                        <button onClick={() => handleToggleBrand(brand)} className="cursor-pointer">
                           <X className="w-3 h-3" />
                         </button>
                       </span>
@@ -466,7 +466,7 @@ export const AppContent: React.FC = () => {
                     {/* Mobile Filter Button */}
                     <button
                       onClick={() => setIsMobileFilterOpen(true)}
-                      className="flex sm:hidden items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-extrabold text-xs border border-amber-300 dark:border-amber-800 shrink-0 active:scale-95 transition-all"
+                      className="flex sm:hidden items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-extrabold text-xs border border-amber-300 dark:border-amber-800 shrink-0 active:scale-95 transition-all cursor-pointer"
                     >
                       <SlidersHorizontal className="w-4 h-4 text-amber-500" />
                       <span>Filtros</span>
@@ -556,7 +556,7 @@ export const AppContent: React.FC = () => {
                       </p>
                       <button
                         onClick={handleResetFilters}
-                        className="px-5 py-2.5 rounded-xl bg-amber-500 text-white text-xs font-bold shadow-md hover:bg-amber-600 transition-colors"
+                        className="px-5 py-2.5 rounded-xl bg-amber-500 text-white text-xs font-bold shadow-md hover:bg-amber-600 transition-colors cursor-pointer"
                       >
                         Limpar Filtros
                       </button>
@@ -609,9 +609,9 @@ export const AppContent: React.FC = () => {
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 rounded-2xl bg-white dark:bg-dark-surface border border-gray-200 dark:border-dark-border shadow-sm">
                   <div className="space-y-1">
                     <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                      <button 
-                        onClick={() => setActiveTab('all')} 
-                        className="font-bold hover:text-amber-500 transition-colors"
+                      <button
+                        onClick={() => setActiveTab('all')}
+                        className="font-bold hover:text-amber-500 transition-colors cursor-pointer"
                       >
                         Início
                       </button>
@@ -631,7 +631,7 @@ export const AppContent: React.FC = () => {
                   {/* Return Button */}
                   <button
                     onClick={() => setActiveTab('all')}
-                    className="flex items-center gap-2 py-2.5 px-4 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs shadow-glow-amber transition-all active:scale-95 shrink-0"
+                    className="flex items-center gap-2 py-2.5 px-4 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs shadow-glow-amber transition-all active:scale-95 shrink-0 cursor-pointer"
                   >
                     <ArrowLeft className="w-4 h-4" />
                     <span>Voltar para as Ofertas</span>
@@ -664,7 +664,7 @@ export const AppContent: React.FC = () => {
                     </div>
                     <button
                       onClick={() => setActiveTab('all')}
-                      className="px-6 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs transition-all shadow-glow-amber active:scale-95"
+                      className="px-6 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs transition-all shadow-glow-amber active:scale-95 cursor-pointer"
                     >
                       Explorar Vitrine de Ofertas
                     </button>
@@ -689,9 +689,9 @@ export const AppContent: React.FC = () => {
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 rounded-2xl bg-white dark:bg-dark-surface border border-gray-200 dark:border-dark-border shadow-sm">
                   <div className="space-y-1">
                     <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                      <button 
-                        onClick={() => setActiveTab('all')} 
-                        className="font-bold hover:text-amber-500 transition-colors"
+                      <button
+                        onClick={() => setActiveTab('all')}
+                        className="font-bold hover:text-amber-500 transition-colors cursor-pointer"
                       >
                         Início
                       </button>
@@ -711,7 +711,7 @@ export const AppContent: React.FC = () => {
                   {/* Return Button */}
                   <button
                     onClick={() => setActiveTab('all')}
-                    className="flex items-center gap-2 py-2.5 px-4 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs shadow-glow-amber transition-all active:scale-95 shrink-0"
+                    className="flex items-center gap-2 py-2.5 px-4 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs shadow-glow-amber transition-all active:scale-95 shrink-0 cursor-pointer"
                   >
                     <ArrowLeft className="w-4 h-4" />
                     <span>Voltar para as Ofertas</span>
@@ -729,7 +729,7 @@ export const AppContent: React.FC = () => {
                     </p>
                     <button
                       onClick={() => setActiveTab('all')}
-                      className="mt-2 px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-glow-amber transition-all"
+                      className="mt-2 px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-glow-amber transition-all cursor-pointer"
                     >
                       Explorar Ofertas
                     </button>
@@ -757,9 +757,9 @@ export const AppContent: React.FC = () => {
       <SeoFooterContent />
 
       {/* Footer */}
-      <Footer 
-        onLogoClick={handleResetFilters} 
-        onOpenAdmin={navigateToAdmin} 
+      <Footer
+        onLogoClick={handleResetFilters}
+        onOpenAdmin={navigateToAdmin}
       />
 
       {/* Modals */}
