@@ -45,10 +45,8 @@ const AWIN_API_TOKEN = process.env.AWIN_API_TOKEN || '60b6489b-bffc-4f5d-887c-89
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
-// URL Oficial da API REST da Awin para Promoções e Vouchers
-const AWIN_PROMOTIONS_API_URL = 
-  process.env.AWIN_PROMOTIONS_API_URL || 
-  `https://api.awin.com/publishers/${AWIN_PUBLISHER_ID}/promotions?advertiserIds=17729&status=active`;
+// URL Oficial da API REST de Promoções (Vouchers/Cupons) da Awin (no singular: /publisher/)
+const AWIN_PROMOTIONS_API_URL = `https://api.awin.com/publisher/${AWIN_PUBLISHER_ID}/promotions`;
 
 /**
  * Validação de configurações
@@ -69,18 +67,29 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 });
 
 /**
- * Realiza requisição autenticada na API REST da Awin
+ * Realiza requisição POST autenticada na API REST de Promoções da Awin
  */
-async function fetchAwinPromotionsApi(url) {
+async function fetchAwinPromotionsApi() {
+  const requestBody = JSON.stringify({
+    filters: {
+      advertiserIds: [17729],
+      status: 'active',
+    },
+  });
+
   return new Promise((resolve, reject) => {
-    console.log(`📡 [AWIN REST API] Conectando a ${url}...`);
-    
-    const req = https.get(url, {
+    console.log(`📡 [AWIN REST API] Enviando POST para ${AWIN_PROMOTIONS_API_URL}...`);
+    console.log(`📦 Payload: ${requestBody}`);
+
+    const req = https.request(AWIN_PROMOTIONS_API_URL, {
+      method: 'POST',
       headers: {
         'Authorization': `Bearer ${AWIN_API_TOKEN}`,
+        'Content-Type': 'application/json',
         'Accept': 'application/json',
         'User-Agent': 'ChaveOfertas/1.0',
-      }
+        'Content-Length': Buffer.byteLength(requestBody),
+      },
     }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
@@ -107,6 +116,7 @@ async function fetchAwinPromotionsApi(url) {
     });
 
     req.on('error', reject);
+    req.write(requestBody);
     req.end();
   });
 }
@@ -126,42 +136,54 @@ function parseDateToIso(dateStr) {
 }
 
 /**
+ * Extrai percentual ou valor de desconto a partir do texto do título
+ */
+function extractDiscountValue(title, description) {
+  const text = `${title || ''} ${description || ''}`;
+  const match = text.match(/(\d+%\s*OFF|R\$\s*\d+[\d.,]*\s*OFF|Frete\s*Gr[áa]tis)/i);
+  return match ? match[0].toUpperCase() : '';
+}
+
+/**
  * Mapeia item do JSON da API da Awin para a tabela coupons
  */
 function mapAwinPromotionToCoupon(item) {
   if (!item) return null;
 
-  // Código do cupom
-  const code = (item.voucherCode || item.code || item.voucher?.code || item.couponCode || '').toString().trim().toUpperCase();
+  // Código do cupom (a Awin pode enviar em voucher.code, code ou voucherCode)
+  const code = (
+    item.voucher?.code || 
+    item.code || 
+    item.voucherCode || 
+    item.couponCode || 
+    ''
+  ).toString().trim().toUpperCase();
+
   if (!code) {
-    // Se não tiver código de cupom, desconsidera
+    // Se a promoção não tiver código de cupom aplicável, descarta
     return null;
   }
 
-  // Link de Afiliado (Deeplink rastreável da Awin)
+  // Link de Afiliado Rastreável Oficial da Awin (urlTracking contém a tagged URL com publisherId)
   const trackingUrl = (
+    item.urlTracking || 
+    item.trackingUrl || 
     item.url || 
     item.deeplink || 
-    item.trackingUrl || 
-    item.clickThroughUrl || 
-    item.advertiser?.clickThroughUrl || 
-    `https://www.awin1.com/awclick.php?mid=${item.advertiserId || item.advertiser?.id || '17729'}&id=${AWIN_PUBLISHER_ID}`
+    `https://www.awin1.com/cread.php?awinmid=${item.advertiser?.id || '17729'}&awinaffid=${AWIN_PUBLISHER_ID}&ued=${encodeURIComponent(item.url || 'https://www.kabum.com.br')}`
   ).toString().trim();
 
   // Dados do Anunciante
-  const advertiserId = (item.advertiserId || item.advertiser?.id || '17729').toString();
-  const storeName = (item.advertiserName || item.advertiser?.name || 'KaBuM!').toString().trim();
+  const advertiserId = (item.advertiser?.id || item.advertiserId || '17729').toString();
+  let storeName = (item.advertiser?.name || item.advertiserName || 'KaBuM!').toString().trim();
+  if (storeName.toLowerCase().includes('kabum')) {
+    storeName = 'KaBuM!';
+  }
 
-  // Descrição / Termos
-  const description = (
-    item.description || 
-    item.title || 
-    item.terms || 
-    `Cupom de desconto ${code} válido para compras na ${storeName}.`
-  ).toString().trim();
-
-  // Desconto
-  const discountValue = (item.discount || item.reduction || item.discountValue || '').toString().trim();
+  // Título e Descrição
+  const title = (item.title || `Cupom ${code} na ${storeName}`).toString().trim();
+  const description = (item.description || item.title || `Aproveite o cupom ${code} em suas compras na ${storeName}.`).toString().trim();
+  const discountValue = item.discount || item.reduction || extractDiscountValue(title, description);
 
   // Validade e Expiração
   const validUntilRaw = item.endDate || item.validUntil || item.expiryDate || item.validTo;
@@ -171,12 +193,12 @@ function mapAwinPromotionToCoupon(item) {
   if (validUntilIso) {
     const expiryDate = new Date(validUntilIso);
     if (expiryDate < new Date()) {
-      return null; // Vencido
+      return null; // Cupom expirado
     }
   }
 
   // ID único consistente
-  const rawId = item.id || item.promotionId || item.voucherId;
+  const rawId = item.promotionId || item.id || item.voucherId;
   const id = rawId ? `awin-cup-${rawId}` : `awin-cup-${advertiserId}-${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
 
   return {
@@ -195,51 +217,49 @@ function mapAwinPromotionToCoupon(item) {
 }
 
 /**
- * Executa a sincronização via API REST da Awin
+ * Executa a sincronização via API REST POST da Awin
  */
 async function runRestCouponSync() {
   const startTime = Date.now();
   console.log('================================================================');
-  console.log('🚀 [AWIN REST SYNC] Sincronização Oficial de Cupons via API REST');
+  console.log('🚀 [AWIN REST SYNC] Sincronização Oficial de Cupons (POST)');
   console.log('================================================================');
   console.log(`🔑 Publisher ID: ${AWIN_PUBLISHER_ID}`);
   console.log(`📡 Endpoint: ${AWIN_PROMOTIONS_API_URL}`);
 
   try {
-    const apiResponse = await fetchAwinPromotionsApi(AWIN_PROMOTIONS_API_URL);
+    const apiResponse = await fetchAwinPromotionsApi();
 
-    // Identifica o array de promoções retornado pela Awin
+    // Extrai a lista de cupons da resposta (geralmente em apiResponse.data)
     let items = [];
-    if (Array.isArray(apiResponse)) {
-      items = apiResponse;
-    } else if (apiResponse && Array.isArray(apiResponse.data)) {
+    if (Array.isArray(apiResponse.data)) {
       items = apiResponse.data;
-    } else if (apiResponse && Array.isArray(apiResponse.promotions)) {
+    } else if (Array.isArray(apiResponse)) {
+      items = apiResponse;
+    } else if (Array.isArray(apiResponse.promotions)) {
       items = apiResponse.promotions;
-    } else if (apiResponse && typeof apiResponse === 'object') {
-      items = Object.values(apiResponse).filter((v) => typeof v === 'object');
     }
 
-    console.log(`📦 Itens brutos recebidos da API da Awin: ${items.length}`);
+    console.log(`📦 Promoções brutas recebidas da Awin: ${items.length}`);
 
     if (items.length === 0) {
-      console.log('ℹ️ Nenhuma promoção/cupom ativa retornada no momento pela API da Awin.');
+      console.log('ℹ️ Nenhuma promoção ativa retornada no momento pela Awin.');
       return;
     }
 
     let validCoupons = [];
-    let expiredCount = 0;
+    let expiredOrNoCode = 0;
 
     for (const item of items) {
       const coupon = mapAwinPromotionToCoupon(item);
       if (coupon) {
         validCoupons.push(coupon);
       } else {
-        expiredCount++;
+        expiredOrNoCode++;
       }
     }
 
-    console.log(`🔍 Cupons válidos mapeados: ${validCoupons.length} (Expirados/Sem código ignorados: ${expiredCount})`);
+    console.log(`🔍 Cupons válidos com código: ${validCoupons.length} (Sem código ou expirados: ${expiredOrNoCode})`);
 
     if (validCoupons.length > 0) {
       const { error } = await supabase
@@ -255,8 +275,8 @@ async function runRestCouponSync() {
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log('================================================================');
-    console.log(`🎉 [CONCLUÍDO COM SUCESSO] Tempo total: ${duration}s`);
-    console.log(`💾 Cupons atualizados no Supabase: ${validCoupons.length}`);
+    console.log(`🎉 [SINCRONIZAÇÃO DE CUPONS CONCLUÍDA] Tempo total: ${duration}s`);
+    console.log(`💾 Total de cupons ativos no banco: ${validCoupons.length}`);
     console.log('================================================================');
   } catch (err) {
     console.error(`❌ [FALHA NA SINCRONIZAÇÃO AWIN REST]: ${err.message}`);
