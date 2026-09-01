@@ -76,7 +76,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
         {onClose && (
           <button
             onClick={onClose}
-            className="flex items-center gap-2 text-xs font-bold text-gray-500 hover:text-amber-500 transition-colors"
+            className="flex items-center gap-2 text-xs font-bold text-gray-500 hover:text-amber-500 transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Voltar para a Vitrine</span>
@@ -87,7 +87,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
           {onOpenAlert && (
             <button
               onClick={() => onOpenAlert(product)}
-              className={`p-2 rounded-2xl border transition-all flex items-center gap-1.5 text-xs font-bold ${
+              className={`p-2 rounded-2xl border transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer ${
                 hasAlert
                   ? 'bg-amber-500 text-white border-amber-600 shadow-glow-amber'
                   : 'bg-gray-100 dark:bg-dark-card text-gray-700 dark:text-gray-300 border-gray-200 dark:border-dark-border hover:border-amber-400'
@@ -100,7 +100,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
 
           <button
             onClick={() => toggleFavorite(product.id)}
-            className={`p-2 rounded-2xl border transition-all flex items-center gap-1.5 text-xs font-bold ${
+            className={`p-2 rounded-2xl border transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer ${
               favorited
                 ? 'bg-rose-500 text-white border-rose-600 shadow-glow-red'
                 : 'bg-gray-100 dark:bg-dark-card text-gray-700 dark:text-gray-300 border-gray-200 dark:border-dark-border hover:border-rose-400'
@@ -161,7 +161,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
 
             <button
               onClick={() => handleClaimOffer(bestOffer)}
-              className="py-3 px-6 rounded-xl font-black text-xs uppercase tracking-wider bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-glow-green transition-all active:scale-95 flex items-center gap-2 shrink-0"
+              className="py-3 px-6 rounded-xl font-black text-xs uppercase tracking-wider bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-glow-green transition-all active:scale-95 flex items-center gap-2 shrink-0 cursor-pointer"
             >
               <span>Ir para a Loja</span>
               <ExternalLink className="w-4 h-4" />
@@ -234,7 +234,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
 
                   <button
                     onClick={() => handleClaimOffer(offer)}
-                    className={`py-2.5 px-4 rounded-xl font-black text-xs flex items-center gap-1.5 transition-all active:scale-95 shrink-0 ${
+                    className={`py-2.5 px-4 rounded-xl font-black text-xs flex items-center gap-1.5 transition-all active:scale-95 shrink-0 cursor-pointer ${
                       isCopied
                         ? 'bg-emerald-600 text-white shadow-glow-green'
                         : isBest

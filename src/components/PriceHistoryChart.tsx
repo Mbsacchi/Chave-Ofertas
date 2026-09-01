@@ -191,7 +191,7 @@ export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({ product })
         <div className="flex items-center gap-1 bg-white dark:bg-dark-card p-1 rounded-2xl border border-gray-200 dark:border-dark-border shadow-sm text-xs font-extrabold shrink-0">
           <button
             onClick={() => setSelectedRange('30d')}
-            className={`px-3 py-1.5 rounded-xl transition-all ${
+            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
               selectedRange === '30d'
                 ? 'bg-amber-500 text-white shadow-sm'
                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
@@ -201,7 +201,7 @@ export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({ product })
           </button>
           <button
             onClick={() => setSelectedRange('90d')}
-            className={`px-3 py-1.5 rounded-xl transition-all ${
+            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
               selectedRange === '90d'
                 ? 'bg-amber-500 text-white shadow-sm'
                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
@@ -211,7 +211,7 @@ export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({ product })
           </button>
           <button
             onClick={() => setSelectedRange('all')}
-            className={`px-3 py-1.5 rounded-xl transition-all ${
+            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
               selectedRange === 'all'
                 ? 'bg-amber-500 text-white shadow-sm'
                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
