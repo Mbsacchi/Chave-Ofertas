@@ -3,6 +3,7 @@ import { Star, Heart, Bell, ExternalLink, ArrowRight, Flame, Clock, Zap, Check }
 import { Product } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { sanitizeUrl } from '../lib/security/sanitizer';
+import { incrementProductClick } from '../services/productAnalyticsService';
 
 interface ProductCardProps {
   product: Product;
@@ -32,9 +33,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     freeShipping: true,
   };
 
-  // Cookie Trap & Link Out
+  // Cookie Trap & Link Out with Click Tracking
   const handleGoToOffer = (e: React.MouseEvent) => {
     e.preventDefault();
+    incrementProductClick(product.id);
+
     if (bestOffer.couponCode && navigator?.clipboard?.writeText) {
       navigator.clipboard.writeText(bestOffer.couponCode).catch(() => {});
       setCopiedCoupon(true);

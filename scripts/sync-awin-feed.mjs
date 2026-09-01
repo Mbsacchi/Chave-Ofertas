@@ -377,6 +377,21 @@ async function runWorker() {
         } else {
           totalUpserted += currentBatch.length;
           console.log(`✅ [Lote #${batchNumber}] ${currentBatch.length} produtos gravados no Supabase. Total acumulado: ${totalUpserted}`);
+
+          // Inserção no histórico de preços (Inteligência de Tendências)
+          const todayStr = new Date().toISOString().split('T')[0];
+          const priceHistoryBatch = currentBatch.map((p) => ({
+            id: `ph-${p.id}-${todayStr}`,
+            product_id: p.id,
+            price: p.min_price,
+            recorded_at: new Date().toISOString(),
+          }));
+
+          try {
+            await supabase.from('price_history').upsert(priceHistoryBatch, { onConflict: 'id', ignoreDuplicates: false });
+          } catch (phErr) {
+            // Silencioso se a tabela ainda estiver sendo criada
+          }
         }
       } catch (err) {
         console.error(`❌ [Lote #${batchNumber}] Exceção no upsert:`, err.message);
@@ -394,6 +409,21 @@ async function runWorker() {
       } else {
         totalUpserted += batch.length;
         console.log(`✅ [Lote Final #${batchNumber}] ${batch.length} produtos gravados. Total acumulado: ${totalUpserted}`);
+
+        // Inserção no histórico de preços para o lote final
+        const todayStr = new Date().toISOString().split('T')[0];
+        const priceHistoryBatch = batch.map((p) => ({
+          id: `ph-${p.id}-${todayStr}`,
+          product_id: p.id,
+          price: p.min_price,
+          recorded_at: new Date().toISOString(),
+        }));
+
+        try {
+          await supabase.from('price_history').upsert(priceHistoryBatch, { onConflict: 'id', ignoreDuplicates: false });
+        } catch (phErr) {
+          // Silencioso
+        }
       }
     } catch (err) {
       console.error(`❌ [Lote Final] Exceção:`, err.message);

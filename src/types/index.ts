@@ -64,10 +64,18 @@ export interface Product {
   priceHistory: PriceHistoryPoint[];
   rating: number;
   reviewsCount: number;
+  clickCount?: number;
   isVerified: boolean;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PriceHistoryRecord {
+  id: string;
+  productId: string;
+  price: number;
+  recordedAt: string;
 }
 
 export interface Coupon {
@@ -148,7 +156,7 @@ export interface SearchState {
   onlyFreeShipping?: boolean;
   onlyWithCoupons?: boolean;
   minRating?: number;
-  sortBy: 'relevance' | 'price_asc' | 'price_desc' | 'discount_desc' | 'rating_desc';
+  sortBy: 'relevance' | 'trending' | 'price_asc' | 'price_desc' | 'discount_desc' | 'rating_desc';
 }
 
 export interface DraftProduct {

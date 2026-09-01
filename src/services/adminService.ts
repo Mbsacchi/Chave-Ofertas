@@ -554,6 +554,7 @@ export const fetchAllGlobalProducts = async (): Promise<Product[]> => {
           bestStoreId: p.best_store_id,
           rating: Number(p.rating) || 4.8,
           reviewsCount: Number(p.reviews_count) || 100,
+          clickCount: Number(p.click_count) || 0,
           isVerified: Boolean(p.is_verified),
           isActive: p.is_active !== undefined ? Boolean(p.is_active) : true,
           createdAt: p.created_at,

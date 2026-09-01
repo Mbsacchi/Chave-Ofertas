@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { X, ExternalLink, ShieldCheck, Tag, TrendingDown, Star, Truck, CreditCard, Heart, Bell, Check, Flame, Clock, Zap } from 'lucide-react';
+import { X, ExternalLink, ShieldCheck, Tag, Star, Truck, CreditCard, Heart, Bell, Check, Flame, Clock, Zap } from 'lucide-react';
 import { Product } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { sanitizeUrl } from '../lib/security/sanitizer';
+import { PriceHistoryChart } from './PriceHistoryChart';
+import { incrementProductClick } from '../services/productAnalyticsService';
 
 interface PriceComparisonModalProps {
   product: Product | null;
@@ -29,44 +31,21 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
   const favorited = isFavorited(product.id);
   const hasAlert = hasActiveAlert(product.id);
 
-  // SVG Chart Calculations for 6-Month Price History
-  const history = product.priceHistory && product.priceHistory.length > 0 
-    ? product.priceHistory 
-    : [{ date: 'Hoje', timestamp: Date.now(), minPrice: product.minPrice }];
-
-  const prices = history.map((h) => h.minPrice);
-  const rawMin = Math.min(...prices);
-  const rawMax = Math.max(...prices);
-  const minP = rawMin * 0.95;
-  const maxP = rawMax === rawMin ? rawMax * 1.05 + 10 : rawMax * 1.05;
-  const chartHeight = 120;
-  const chartWidth = 500;
-
-  const points = history.map((point, index) => {
-    const divisor = history.length > 1 ? history.length - 1 : 1;
-    const x = (index / divisor) * (chartWidth - 40) + 20;
-    const y = chartHeight - ((point.minPrice - minP) / ((maxP - minP) || 1)) * (chartHeight - 30) - 15;
-    return { x, y, point };
-  });
-
-  const pathD = points.reduce((acc, curr, idx) => {
-    return idx === 0 ? `M ${curr.x} ${curr.y}` : `${acc} L ${curr.x} ${curr.y}`;
-  }, '');
-
-  const areaD = `${pathD} L ${points[points.length - 1].x} ${chartHeight} L ${points[0].x} ${chartHeight} Z`;
-
   const [copiedOfferId, setCopiedOfferId] = useState<string | null>(null);
   const [revealedOfferCoupons, setRevealedOfferCoupons] = useState<Record<string, boolean>>({});
 
   const handleClaimOffer = (offer: typeof bestOffer) => {
-    // 1. If offer has coupon, copy silently to clipboard
+    // 1. Rastreamento e incremento atômico de clique de popularidade
+    incrementProductClick(product.id);
+
+    // 2. Copia cupom silenciosamente se houver
     if (offer.couponCode && navigator?.clipboard?.writeText) {
       navigator.clipboard.writeText(offer.couponCode).catch(() => {});
       setCopiedOfferId(offer.id);
       setRevealedOfferCoupons((prev) => ({ ...prev, [offer.id]: true }));
       setTimeout(() => setCopiedOfferId(null), 3000);
     }
-    // 2. Open store affiliate link
+    // 3. Abre link de afiliado rastreável
     window.open(sanitizeUrl(offer.affiliateUrl), '_blank', 'noopener,noreferrer');
   };
 
@@ -226,78 +205,9 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
           </div>
         </div>
 
-        {/* 6-Month Price History Chart */}
-        <div className="my-4 sm:my-6 p-3 sm:p-4 rounded-2xl bg-gray-50 dark:bg-dark-card border border-gray-200 dark:border-dark-border">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-2 mb-3">
-            <div className="flex items-center gap-2">
-              <TrendingDown className="w-4 h-4 text-amber-500 shrink-0" />
-              <h3 className="text-[11px] sm:text-xs font-extrabold uppercase tracking-wider text-gray-900 dark:text-white">
-                Histórico de Preços (Últimos 6 Meses)
-              </h3>
-            </div>
-            <span className="text-[10px] sm:text-[11px] font-semibold text-gray-500 dark:text-gray-400">
-              Menor histórico: <strong className="text-emerald-500">R$ {product.historicalLowestPrice.toFixed(2)}</strong>
-            </span>
-          </div>
-
-          <div className="w-full overflow-x-auto">
-            <svg
-              viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-              className="w-full h-24 sm:h-28 overflow-visible min-w-[280px]"
-            >
-              <defs>
-                <linearGradient id="chartFillGradGold" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.35" />
-                  <stop offset="100%" stopColor="#F59E0B" stopOpacity="0.0" />
-                </linearGradient>
-              </defs>
-
-              {/* Grid Lines */}
-              <line x1="0" y1="20" x2={chartWidth} y2="20" stroke="#374151" strokeDasharray="3 3" opacity="0.3" />
-              <line x1="0" y1="60" x2={chartWidth} y2="60" stroke="#374151" strokeDasharray="3 3" opacity="0.3" />
-              <line x1="0" y1="100" x2={chartWidth} y2="100" stroke="#374151" strokeDasharray="3 3" opacity="0.3" />
-
-              {/* Gradient Area */}
-              <path d={areaD} fill="url(#chartFillGradGold)" />
-
-              {/* Stroke Line */}
-              <path d={pathD} fill="none" stroke="#F59E0B" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-
-              {/* Data Points */}
-              {points.map((pt, idx) => (
-                <g key={idx}>
-                  <circle
-                    cx={pt.x}
-                    cy={pt.y}
-                    r={idx === points.length - 1 ? 5 : 4}
-                    fill={idx === points.length - 1 ? '#10B981' : '#F59E0B'}
-                    stroke="#FFFFFF"
-                    strokeWidth="2"
-                  />
-                  <text
-                    x={pt.x}
-                    y={chartHeight + 14}
-                    textAnchor="middle"
-                    fill="#9CA3AF"
-                    fontSize="9"
-                    fontWeight="600"
-                  >
-                    {pt.point.date}
-                  </text>
-                  <text
-                    x={pt.x}
-                    y={pt.y - 8}
-                    textAnchor="middle"
-                    fill="#F59E0B"
-                    fontSize="9"
-                    fontWeight="700"
-                  >
-                    R$ {pt.point.minPrice.toFixed(0)}
-                  </text>
-                </g>
-              ))}
-            </svg>
-          </div>
+        {/* Recharts Interactive Price History */}
+        <div className="my-4 sm:my-6">
+          <PriceHistoryChart product={product} />
         </div>
 
         {/* Store Comparison - Mobile-first stacked cards */}

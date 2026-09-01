@@ -154,6 +154,8 @@ export function executeFuzzySearch(
     const priceB = getEffectivePrice(b, state.selectedStores);
 
     switch (state.sortBy) {
+      case 'trending':
+        return (b.clickCount || 0) - (a.clickCount || 0);
       case 'price_asc':
         return priceA - priceB;
       case 'price_desc':

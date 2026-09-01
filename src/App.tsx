@@ -118,6 +118,13 @@ export const AppContent: React.FC = () => {
     return [...liveCustomProducts, ...remainingMock];
   }, [liveCustomProducts]);
 
+  // Trending products ordered by clickCount descending for the '🔥 Em Alta' showcase
+  const trendingProducts = useMemo(() => {
+    return [...allProducts]
+      .sort((a, b) => (b.clickCount || 0) - (a.clickCount || 0))
+      .slice(0, 4);
+  }, [allProducts]);
+
   // Search & Navigation State
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -476,6 +483,53 @@ export const AppContent: React.FC = () => {
                     </div>
                   </div>
                 </div>
+
+                {/* Vitrine '🔥 Em Alta' (Produtos Mais Populares e Mais Clicados) */}
+                {selectedCategory === 'all' && selectedBrands.length === 0 && !searchQuery.trim() && currentPage === 1 && (
+                  <div className="p-4 sm:p-6 rounded-3xl bg-gradient-to-br from-amber-500/10 via-orange-500/5 to-transparent border border-amber-300/60 dark:border-amber-500/30 shadow-sm space-y-4">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-2 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white shadow-glow-amber">
+                          <Flame className="w-5 h-5 fill-current animate-pulse" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-lg sm:text-xl font-black text-gray-900 dark:text-white">
+                              🔥 Em Alta na Comunidade
+                            </h3>
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500 text-white tracking-wider">
+                              Mais Clicados
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            Produtos com maior volume de cliques e interesse em tempo real
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => setSortBy('trending')}
+                        className="text-xs font-black text-amber-600 dark:text-amber-400 hover:underline flex items-center gap-1 shrink-0 cursor-pointer"
+                      >
+                        <span>Ordenar vitrine por popularidade</span>
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-stretch">
+                      {trendingProducts.map((trendProd, rankIdx) => (
+                        <div key={`trend-${trendProd.id}`} className="relative h-full flex flex-col">
+                          <ProductCard
+                            product={trendProd}
+                            isFeatured={rankIdx === 0}
+                            onOpenCompare={setComparingProduct}
+                            onOpenAlert={setAlertProduct}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-6">
                   <div className="flex items-center justify-between">

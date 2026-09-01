@@ -345,6 +345,21 @@ export async function processAwinStreamSync(supabase: any, maxLimit = 0) {
             } else {
               upsertedCount += currentBatch.length;
               console.log(`✅ [AWIN ASYNC Lote #${batchNumber}] ${currentBatch.length} produtos gravados. Total acumulado: ${upsertedCount}`);
+
+              // Inserção no histórico de preços (Inteligência de Tendências)
+              const todayStr = new Date().toISOString().split('T')[0];
+              const priceHistoryBatch = currentBatch.map((p) => ({
+                id: `ph-${p.id}-${todayStr}`,
+                product_id: p.id,
+                price: p.min_price,
+                recorded_at: new Date().toISOString(),
+              }));
+
+              try {
+                await supabase.from('price_history').upsert(priceHistoryBatch, { onConflict: 'id', ignoreDuplicates: false });
+              } catch (phErr) {
+                // Silencioso se tabela estiver sendo provisionada
+              }
             }
           } catch (batchErr: any) {
             console.error(`❌ [AWIN ASYNC Lote #${batchNumber}] Exceção no upsert:`, batchErr.message);
@@ -362,6 +377,20 @@ export async function processAwinStreamSync(supabase: any, maxLimit = 0) {
           if (!error) {
             upsertedCount += batch.length;
             console.log(`✅ [AWIN ASYNC Lote Final #${batchNumber}] ${batch.length} produtos gravados. Total: ${upsertedCount}`);
+
+            const todayStr = new Date().toISOString().split('T')[0];
+            const priceHistoryBatch = batch.map((p) => ({
+              id: `ph-${p.id}-${todayStr}`,
+              product_id: p.id,
+              price: p.min_price,
+              recorded_at: new Date().toISOString(),
+            }));
+
+            try {
+              await supabase.from('price_history').upsert(priceHistoryBatch, { onConflict: 'id', ignoreDuplicates: false });
+            } catch (phErr) {
+              // Silencioso
+            }
           }
         } catch (batchErr: any) {
           console.error(`❌ [AWIN ASYNC Lote Final] Exceção:`, batchErr.message);

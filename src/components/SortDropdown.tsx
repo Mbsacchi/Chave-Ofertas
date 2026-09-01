@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowUpDown, ChevronDown, Check, Sparkles, TrendingDown, TrendingUp, Percent, Star } from 'lucide-react';
+import { ArrowUpDown, ChevronDown, Check, Sparkles, TrendingDown, TrendingUp, Percent, Star, Flame } from 'lucide-react';
 import { SearchState } from '../types';
 
 interface SortOption {
@@ -13,6 +13,11 @@ const SORT_OPTIONS: SortOption[] = [
     value: 'relevance', 
     label: 'Mais Relevantes',
     icon: <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+  },
+  { 
+    value: 'trending', 
+    label: '🔥 Em Alta (Mais Clicados)',
+    icon: <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500" />
   },
   { 
     value: 'price_asc', 
