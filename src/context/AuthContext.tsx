@@ -77,7 +77,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalFeature, setAuthModalFeature] = useState('recursos exclusivos');
 
-  // Helper para formatar o objeto de usuário do Supabase
+  // Helper para formatar o objeto de usuário do Supabase (qualquer conta autenticada)
   const formatSupabaseUser = (u: any): CustomUser => {
     return {
       uid: u.id,
@@ -108,10 +108,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const formatted = formatSupabaseUser(session.user);
           setUser(formatted);
           localStorage.setItem('chave_user_session', JSON.stringify(formatted));
-        } else if (error || !session) {
-          // Apenas limpa se não houver sessão ativa confirmada no Supabase
-          if (!localStorage.getItem('chave_user_session')) {
-            setUser(null);
+        } else if (!session) {
+          const saved = localStorage.getItem('chave_user_session');
+          if (saved) {
+            try {
+              setUser(JSON.parse(saved));
+            } catch {
+              setUser(null);
+            }
           }
         }
         setLoading(false);
@@ -120,7 +124,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (isMounted) setLoading(false);
       });
 
-    // 2. Ouvinte de mudanças de estado (Login, Logout, Token Refresh, Storage sync)
+    // 2. Ouvinte de mudanças de estado (Login, Logout, Token Refresh)
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
@@ -139,7 +143,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // 3. Ouvinte de evento storage para sincronização entre abas/janela popup
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key && e.key.includes('-auth-token')) {
+      if (e.key && (e.key.includes('-auth-token') || e.key === 'chave_user_session')) {
+        const saved = localStorage.getItem('chave_user_session');
+        if (saved) {
+          try {
+            setUser(JSON.parse(saved));
+          } catch {}
+        }
         supabase.auth.getSession().then(({ data: { session } }) => {
           if (!isMounted) return;
           if (session?.user) {
