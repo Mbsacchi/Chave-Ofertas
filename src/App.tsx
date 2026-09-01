@@ -14,10 +14,11 @@ import { SeoFooterContent } from './components/SeoFooterContent';
 import { Footer } from './components/Footer';
 import { SortDropdown } from './components/SortDropdown';
 import { AdminPanel } from './components/AdminPanel';
-import { MOCK_PRODUCTS, MOCK_COUPONS, CATEGORIES_TREE } from './data/mockData';
+import { MOCK_PRODUCTS, CATEGORIES_TREE } from './data/mockData';
 import { executeFuzzySearch } from './lib/search/fuzzySearch';
-import { Product, StoreId, SearchState } from './types';
+import { Product, StoreId, SearchState, Coupon } from './types';
 import { fetchLiveDatabaseProducts } from './services/adminService';
+import { fetchActiveCoupons } from './services/couponService';
 import { useAuth } from './context/AuthContext';
 import { useBodyScrollLock } from './lib/hooks/useBodyScrollLock';
 import { useHardwareBackNavigation } from './lib/hooks/useHardwareBackNavigation';
@@ -50,6 +51,9 @@ export const AppContent: React.FC = () => {
 
   // Dynamic Live Database Products
   const [liveCustomProducts, setLiveCustomProducts] = useState<Product[]>([]);
+  // Dynamic Real Coupons from Supabase (sem mock)
+  const [realCoupons, setRealCoupons] = useState<Coupon[]>([]);
+  const [isLoadingCoupons, setIsLoadingCoupons] = useState(false);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -60,17 +64,34 @@ export const AppContent: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Fetch products from database on initial load
+  // Fetch products and real coupons from database on initial load
   useEffect(() => {
-    const loadDbProducts = async () => {
+    let isMounted = true;
+
+    const loadDbData = async () => {
       try {
         const dbProds = await fetchLiveDatabaseProducts();
-        setLiveCustomProducts(dbProds);
+        if (isMounted) setLiveCustomProducts(dbProds);
       } catch (err) {
         console.warn('Erro ao carregar produtos do banco:', err);
       }
+
+      try {
+        if (isMounted) setIsLoadingCoupons(true);
+        const couponsData = await fetchActiveCoupons();
+        if (isMounted) setRealCoupons(couponsData);
+      } catch (err) {
+        console.warn('Erro ao carregar cupons reais do banco:', err);
+      } finally {
+        if (isMounted) setIsLoadingCoupons(false);
+      }
     };
-    loadDbProducts();
+
+    loadDbData();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const navigateToAdmin = () => {
@@ -235,14 +256,14 @@ export const AppContent: React.FC = () => {
     }
   };
 
-  // Filtered coupons
+  // Filtered real coupons (Direto do Supabase)
   const filteredCoupons = useMemo(() => {
-    return MOCK_COUPONS.filter((coupon) => {
-      if (selectedStores.length > 0 && !selectedStores.includes(coupon.storeId)) return false;
+    return realCoupons.filter((coupon) => {
+      if (selectedStores.length > 0 && coupon.storeId && !selectedStores.includes(coupon.storeId)) return false;
       if (selectedCategory !== 'all' && coupon.categoryId && coupon.categoryId !== selectedCategory) return false;
       return true;
     });
-  }, [selectedStores, selectedCategory]);
+  }, [realCoupons, selectedStores, selectedCategory]);
 
   // Favorited products
   const favoritedProducts = useMemo(() => {
@@ -549,7 +570,7 @@ export const AppContent: React.FC = () => {
                       <span>Central de Cupons Verificados</span>
                     </h2>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Economize até 40% com códigos testados e ativos hoje na Amazon, Mercado Livre, Shopee e mais.
+                      Economize com códigos de desconto reais e ativos nas lojas parceiras (KaBuM!, Amazon, Mercado Livre, Shopee e mais).
                     </p>
                   </div>
 
@@ -563,11 +584,47 @@ export const AppContent: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6">
-                  {filteredCoupons.map((coupon) => (
-                    <CouponCard key={coupon.id} coupon={coupon} />
-                  ))}
-                </div>
+                {/* Loading State */}
+                {isLoadingCoupons && (
+                  <div className="py-20 text-center space-y-4">
+                    <div className="w-12 h-12 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto" />
+                    <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">
+                      Carregando cupons verificados em tempo real...
+                    </p>
+                  </div>
+                )}
+
+                {/* Empty State */}
+                {!isLoadingCoupons && filteredCoupons.length === 0 && (
+                  <div className="text-center py-16 px-4 bg-white dark:bg-dark-surface rounded-3xl border border-gray-200 dark:border-dark-border space-y-4">
+                    <div className="w-16 h-16 rounded-3xl bg-amber-500/10 text-amber-500 flex items-center justify-center mx-auto">
+                      <Tag className="w-8 h-8" />
+                    </div>
+                    <div className="max-w-md mx-auto space-y-1.5">
+                      <h3 className="text-lg font-black text-gray-900 dark:text-white">
+                        Nenhum cupom ativo no momento
+                      </h3>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Nossos robôs estão monitorando os feeds da Awin e das lojas parceiras. Novos cupons verificados aparecerão aqui assim que forem liberados.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab('all')}
+                      className="px-6 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs transition-all shadow-glow-amber active:scale-95"
+                    >
+                      Explorar Vitrine de Ofertas
+                    </button>
+                  </div>
+                )}
+
+                {/* Coupons Grid */}
+                {!isLoadingCoupons && filteredCoupons.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6">
+                    {filteredCoupons.map((coupon) => (
+                      <CouponCard key={coupon.id} coupon={coupon} />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

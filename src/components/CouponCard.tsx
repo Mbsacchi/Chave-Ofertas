@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Copy, Check, ExternalLink, ShieldCheck, Clock, ThumbsUp, Tag, Scissors, Sparkles } from 'lucide-react';
+import { Copy, Check, ExternalLink, ShieldCheck, Clock, ThumbsUp, Tag, Scissors } from 'lucide-react';
 import { Coupon } from '../types';
 import { sanitizeUrl } from '../lib/security/sanitizer';
 
@@ -11,39 +11,41 @@ export const CouponCard: React.FC<CouponCardProps> = ({ coupon }) => {
   const [copied, setCopied] = useState(false);
   const [isRevealed, setIsRevealed] = useState(false);
 
-  // Masked code generator (e.g., KABUM10 -> KAB***)
+  // Masked code generator (ex: KABUM10 -> KAB***)
   const maskedCode = coupon.code.length > 4 
     ? `${coupon.code.slice(0, 3)}***` 
     : `${coupon.code.slice(0, 1)}***`;
 
   const displayCode = isRevealed || copied ? coupon.code : maskedCode;
 
-  // Cookie Trap Dual Action: Silent copy + window.open to guarantee affiliate cookie drop
+  // URL de rastreamento com segurança
+  const trackingUrl = sanitizeUrl(coupon.trackingUrl || coupon.affiliateUrl || '');
+
+  // Ação Estratégica: Copiar o código na área de transferência e abrir a loja imediatamente
   const handleClaimCoupon = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
 
-    // 1. Silent clipboard copy of full code
+    // 1. Copia o código para a área de transferência do usuário
     if (navigator?.clipboard?.writeText) {
       navigator.clipboard.writeText(coupon.code).catch(() => {});
     }
 
-    // 2. Open affiliate store in new tab
-    const sanitizedUrl = sanitizeUrl(coupon.affiliateUrl);
-    window.open(sanitizedUrl, '_blank', 'noopener,noreferrer');
+    // 2. Abre a URL de afiliado em nova aba para fixar o cookie de comissão
+    if (trackingUrl && trackingUrl !== '#') {
+      window.open(trackingUrl, '_blank', 'noopener,noreferrer');
+    }
 
-    // 3. Reveal the full code and show immediate conversion feedback
+    // 3. Feedback visual no card
     setIsRevealed(true);
     setCopied(true);
     setTimeout(() => setCopied(false), 3500);
   };
 
-  const formattedDiscount =
-    coupon.discountType === 'percentage'
-      ? `${coupon.discountValue}% OFF`
-      : coupon.discountType === 'fixed'
-      ? `R$ ${coupon.discountValue} OFF`
-      : 'Frete Grátis';
+  // Formatação de data de expiração se informada
+  const formattedExpiry = coupon.validUntil 
+    ? new Date(coupon.validUntil).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : null;
 
   return (
     <div className="relative group bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border rounded-3xl p-6 sm:p-7 flex flex-col justify-between shadow-sm hover:shadow-xl hover:border-amber-400/80 dark:hover:border-amber-400/80 transition-all duration-300 space-y-5">
@@ -51,7 +53,7 @@ export const CouponCard: React.FC<CouponCardProps> = ({ coupon }) => {
       <div>
         <div className="flex items-center justify-between gap-3 mb-3.5">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-gray-100 dark:bg-dark-surface p-1.5 border border-gray-200 dark:border-dark-border flex items-center justify-center font-black text-xs text-gray-800 dark:text-gray-200 shadow-sm shrink-0">
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 dark:bg-amber-950/40 p-1.5 border border-amber-200 dark:border-amber-800/40 flex items-center justify-center font-black text-xs text-amber-900 dark:text-amber-300 shadow-sm shrink-0">
               {coupon.storeName.slice(0, 3).toUpperCase()}
             </div>
             <div>
@@ -60,23 +62,23 @@ export const CouponCard: React.FC<CouponCardProps> = ({ coupon }) => {
               </span>
               <div className="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-bold mt-0.5">
                 <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Testado {coupon.verifiedAt}</span>
+                <span>Cupom Verificado</span>
               </div>
             </div>
           </div>
 
           <span className="px-3 py-1.5 rounded-xl text-xs font-black bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md flex items-center gap-1.5">
             <Tag className="w-3.5 h-3.5" />
-            <span>{formattedDiscount}</span>
+            <span>CUPOM REAL</span>
           </span>
         </div>
 
         {/* Title and Description */}
         <h3 className="text-base sm:text-lg font-black text-gray-900 dark:text-white leading-snug">
-          {coupon.title}
+          {coupon.title || `Cupom de Desconto ${coupon.storeName}`}
         </h3>
 
-        <p className="text-xs text-gray-600 dark:text-gray-400 mt-2 leading-relaxed">
+        <p className="text-xs text-gray-600 dark:text-gray-400 mt-2 leading-relaxed line-clamp-3">
           {coupon.description}
         </p>
       </div>
@@ -88,17 +90,24 @@ export const CouponCard: React.FC<CouponCardProps> = ({ coupon }) => {
           <div className="flex justify-between items-center text-[11px] font-bold text-gray-500 dark:text-gray-400 mb-1.5">
             <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-black">
               <ThumbsUp className="w-3.5 h-3.5" />
-              <span>{coupon.successRate}% de sucesso ({coupon.usageCount.toLocaleString('pt-BR')} usos hoje)</span>
+              <span>98% de sucesso</span>
             </span>
-            <span className="flex items-center gap-1 text-red-500 font-extrabold">
-              <Clock className="w-3.5 h-3.5" />
-              <span>Expira em breve</span>
-            </span>
+            {formattedExpiry ? (
+              <span className="flex items-center gap-1 text-red-500 font-extrabold">
+                <Clock className="w-3.5 h-3.5" />
+                <span>Válido até {formattedExpiry}</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-amber-500 font-extrabold">
+                <Clock className="w-3.5 h-3.5" />
+                <span>Oferta Ativa</span>
+              </span>
+            )}
           </div>
           <div className="w-full h-2 bg-gray-100 dark:bg-dark-hover rounded-full overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all duration-500"
-              style={{ width: `${coupon.successRate}%` }}
+              style={{ width: '98%' }}
             />
           </div>
         </div>
@@ -111,7 +120,7 @@ export const CouponCard: React.FC<CouponCardProps> = ({ coupon }) => {
               ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 shadow-glow-green'
               : 'bg-gray-50/80 dark:bg-dark-surface border-amber-300 dark:border-amber-700/60 hover:border-amber-500 hover:bg-amber-50/40 dark:hover:bg-amber-950/20'
           }`}
-          title="Clique para copiar o cupom e abrir a loja com desconto"
+          title="Clique para copiar e ir para a loja parceira com desconto"
         >
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="p-1.5 rounded-lg bg-amber-500/10 dark:bg-amber-400/10 text-amber-600 dark:text-amber-400 shrink-0">
@@ -119,7 +128,7 @@ export const CouponCard: React.FC<CouponCardProps> = ({ coupon }) => {
             </div>
             <div className="min-w-0">
               <span className="text-[9px] uppercase tracking-wider font-extrabold text-gray-400 block">
-                {isRevealed || copied ? 'Cupom Desbloqueado:' : 'Clique para Revelar & Copiar:'}
+                {isRevealed || copied ? 'Código Copiado:' : 'Clique para Revelar & Copiar:'}
               </span>
               <span className="font-mono font-black text-sm sm:text-base tracking-widest text-gray-900 dark:text-white truncate block">
                 {displayCode}
@@ -146,7 +155,7 @@ export const CouponCard: React.FC<CouponCardProps> = ({ coupon }) => {
           </span>
         </div>
 
-        {/* Primary Dual-Action CTA Button */}
+        {/* Primary Dual-Action CTA Button (Nome Obrigatório: "Copiar e Ir para a Loja") */}
         <button
           type="button"
           onClick={handleClaimCoupon}
@@ -163,8 +172,8 @@ export const CouponCard: React.FC<CouponCardProps> = ({ coupon }) => {
             </>
           ) : (
             <>
-              <Sparkles className="w-4 h-4" />
-              <span>Pegar Cupom & Ir para Loja</span>
+              <Copy className="w-4 h-4" />
+              <span>Copiar e Ir para a Loja</span>
               <ExternalLink className="w-4 h-4 ml-0.5" />
             </>
           )}

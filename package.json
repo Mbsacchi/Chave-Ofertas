@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "sync:awin": "node scripts/sync-awin-feed.mjs"
+    "sync:awin": "node scripts/sync-awin-feed.mjs",
+    "sync:coupons": "node scripts/sync-awin-coupons.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",

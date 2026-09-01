@@ -72,25 +72,27 @@ export interface Product {
 
 export interface Coupon {
   id: string;
-  code: string;
-  title: string;
-  description: string;
-  storeId: StoreId;
+  advertiserId?: string;
   storeName: string;
-  storeLogo: string;
-  discountType: 'percentage' | 'fixed' | 'shipping';
-  discountValue: number;
-  minPurchase: number;
-  affiliateUrl: string;
+  code: string;
+  description: string;
+  trackingUrl: string;
+  validUntil?: string;
+  title?: string;
+  storeId?: StoreId;
+  storeLogo?: string;
+  discountType?: 'percentage' | 'fixed' | 'shipping';
+  discountValue?: number;
+  minPurchase?: number;
+  affiliateUrl?: string;
   categoryId?: string;
-  validFrom: string;
-  validUntil: string;
-  isActive: boolean;
-  isExclusive: boolean;
-  isVerified: boolean;
-  usageCount: number;
-  successRate: number;
-  verifiedAt: string;
+  validFrom?: string;
+  isActive?: boolean;
+  isExclusive?: boolean;
+  isVerified?: boolean;
+  usageCount?: number;
+  successRate?: number;
+  verifiedAt?: string;
 }
 
 // 3-Level Hierarchical Tree
