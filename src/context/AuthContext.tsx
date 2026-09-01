@@ -77,7 +77,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalFeature, setAuthModalFeature] = useState('recursos exclusivos');
 
-  // Helper para formatar o objeto de usuário do Supabase (qualquer conta autenticada)
+  // Helper para formatar o objeto de usuário do Supabase (para qualquer usuário)
   const formatSupabaseUser = (u: any): CustomUser => {
     return {
       uid: u.id,
@@ -99,7 +99,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let isMounted = true;
 
-    // 1. Restaura sessão ativa do Supabase
+    // 1. Restaura sessão ativa do Supabase na inicialização
     supabase.auth
       .getSession()
       .then(({ data: { session }, error }) => {
@@ -124,7 +124,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (isMounted) setLoading(false);
       });
 
-    // 2. Ouvinte de mudanças de estado (Login, Logout, Token Refresh)
+    // 2. Ouvinte nativo de mudanças de estado (Login, Logout, Token Refresh)
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
@@ -134,6 +134,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(formatted);
         localStorage.setItem('chave_user_session', JSON.stringify(formatted));
         setShowAuthModal(false);
+
+        // Limpa tokens do OAuth da URL caso presentes
+        if (window.location.hash || window.location.search.includes('code=')) {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         localStorage.removeItem('chave_user_session');
@@ -141,143 +146,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
     });
 
-    // 3. Ouvinte de evento storage para sincronização entre abas/janela popup
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key && (e.key.includes('-auth-token') || e.key === 'chave_user_session')) {
-        const saved = localStorage.getItem('chave_user_session');
-        if (saved) {
-          try {
-            setUser(JSON.parse(saved));
-          } catch {}
-        }
-        supabase.auth.getSession().then(({ data: { session } }) => {
-          if (!isMounted) return;
-          if (session?.user) {
-            const formatted = formatSupabaseUser(session.user);
-            setUser(formatted);
-            localStorage.setItem('chave_user_session', JSON.stringify(formatted));
-          }
-        });
-      }
-    };
-    window.addEventListener('storage', handleStorageChange);
-
     return () => {
       isMounted = false;
       subscription.unsubscribe();
-      window.removeEventListener('storage', handleStorageChange);
     };
   }, []);
 
-  // Login com Google oficial via Supabase OAuth em POPUP
+  // Login com Google oficial via Supabase OAuth (Fluxo Seguro com Redirecionamento Direto)
   const signInWithGoogle = async (): Promise<void> => {
     if (!isSupabaseConfigured) {
       console.error('Supabase não configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');
       throw new Error('Supabase não configurado no ambiente.');
     }
 
-    const redirectUrl = `${window.location.origin}/auth/callback`;
-
-    // 1. Obter a URL de autenticação OAuth com skipBrowserRedirect: true
-    const { data, error } = await supabase.auth.signInWithOAuth({
+    const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: redirectUrl,
-        skipBrowserRedirect: true,
+        redirectTo: window.location.origin,
         queryParams: {
           prompt: 'select_account',
         },
       },
     });
 
-    if (error || !data?.url) {
-      console.error('Erro ao gerar URL de login com Google no Supabase:', error?.message);
-      throw error || new Error('URL de autenticação não encontrada');
+    if (error) {
+      console.error('Erro ao iniciar login com Google:', error.message);
+      throw error;
     }
-
-    // 2. Centralizar as dimensões do Popup na tela
-    const width = 500;
-    const height = 620;
-    const left = window.screenX + (window.outerWidth - width) / 2;
-    const top = window.screenY + (window.outerHeight - height) / 2;
-
-    const popup = window.open(
-      data.url,
-      'supabase-google-auth-popup',
-      `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes,status=yes`
-    );
-
-    if (!popup) {
-      // Caso bloqueador de popups esteja ativo no navegador do usuário
-      console.warn('Popup bloqueado pelo navegador. Utilizando redirecionamento como fallback.');
-      window.location.href = data.url;
-      return;
-    }
-
-    popup.focus();
-
-    // 3. Monitoramento da conclusão do login via postMessage do popup ou fechamento
-    return new Promise<void>((resolve) => {
-      let isCompleted = false;
-
-      const finishLogin = async (incomingSession?: any) => {
-        if (isCompleted) return;
-        isCompleted = true;
-
-        window.removeEventListener('message', handleMessage);
-        if (popupInterval) clearInterval(popupInterval);
-
-        try {
-          if (incomingSession?.access_token && incomingSession?.refresh_token) {
-            await supabase.auth.setSession({
-              access_token: incomingSession.access_token,
-              refresh_token: incomingSession.refresh_token,
-            });
-          }
-
-          const { data: sessionData } = await supabase.auth.getSession();
-          const targetUser = incomingSession?.user || sessionData?.session?.user;
-
-          if (targetUser) {
-            const formatted = formatSupabaseUser(targetUser);
-            setUser(formatted);
-            localStorage.setItem('chave_user_session', JSON.stringify(formatted));
-          }
-        } catch (e) {
-          console.warn('Erro ao atualizar sessão:', e);
-        }
-
-        setShowAuthModal(false);
-        resolve();
-      };
-
-      const handleMessage = (event: MessageEvent) => {
-        if (event.origin !== window.location.origin) return;
-        if (event.data?.type === 'SUPABASE_AUTH_SUCCESS') {
-          finishLogin(event.data.session);
-        }
-      };
-
-      window.addEventListener('message', handleMessage);
-
-      // Verifica periodicamente se o popup foi finalizado/fechado
-      const popupInterval = setInterval(async () => {
-        if (popup.closed) {
-          clearInterval(popupInterval);
-          setTimeout(async () => {
-            if (!isCompleted) {
-              const { data: sessionData } = await supabase.auth.getSession();
-              if (sessionData?.session?.user) {
-                finishLogin(sessionData.session);
-              } else {
-                window.removeEventListener('message', handleMessage);
-                resolve();
-              }
-            }
-          }, 400);
-        }
-      }, 500);
-    });
   };
 
   // Magic Link com Supabase OTP
