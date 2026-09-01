@@ -77,6 +77,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalFeature, setAuthModalFeature] = useState('recursos exclusivos');
 
+  // Helper para formatar o objeto de usuário do Supabase
+  const formatSupabaseUser = (u: any): CustomUser => {
+    return {
+      uid: u.id,
+      displayName:
+        u.user_metadata?.full_name ||
+        u.user_metadata?.name ||
+        u.email?.split('@')[0] ||
+        'Usuário',
+      email: u.email || null,
+      photoURL:
+        u.user_metadata?.avatar_url ||
+        u.user_metadata?.picture ||
+        `https://api.dicebear.com/7.x/bottts/svg?seed=${u.id}`,
+      isPremium: true,
+    };
+  };
+
   // Listener de autenticação em tempo real com o Supabase
   useEffect(() => {
     let isMounted = true;
@@ -85,21 +103,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     supabase.auth.getSession().then(({ data: { session }, error }) => {
       if (!isMounted) return;
       if (!error && session?.user) {
-        const u = session.user;
-        const formatted: CustomUser = {
-          uid: u.id,
-          displayName:
-            u.user_metadata?.full_name ||
-            u.user_metadata?.name ||
-            u.email?.split('@')[0] ||
-            'Usuário',
-          email: u.email || null,
-          photoURL:
-            u.user_metadata?.avatar_url ||
-            u.user_metadata?.picture ||
-            `https://api.dicebear.com/7.x/bottts/svg?seed=${u.id}`,
-          isPremium: true,
-        };
+        const formatted = formatSupabaseUser(session.user);
         setUser(formatted);
         localStorage.setItem('chave_user_session', JSON.stringify(formatted));
       } else if (!localStorage.getItem('chave_user_session')) {
@@ -110,27 +114,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (isMounted) setLoading(false);
     });
 
-    // 2. Mudanças de estado de autenticação (Login via OAuth Google, Logout, Token Refresh)
+    // 2. Ouvinte de mudanças de estado (Login, Logout, Token Refresh, Storage sync)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!isMounted) return;
       if (session?.user) {
-        const u = session.user;
-        const formatted: CustomUser = {
-          uid: u.id,
-          displayName:
-            u.user_metadata?.full_name ||
-            u.user_metadata?.name ||
-            u.email?.split('@')[0] ||
-            'Usuário',
-          email: u.email || null,
-          photoURL:
-            u.user_metadata?.avatar_url ||
-            u.user_metadata?.picture ||
-            `https://api.dicebear.com/7.x/bottts/svg?seed=${u.id}`,
-          isPremium: true,
-        };
+        const formatted = formatSupabaseUser(session.user);
         setUser(formatted);
         localStorage.setItem('chave_user_session', JSON.stringify(formatted));
+        setShowAuthModal(false);
       } else {
         setUser(null);
         localStorage.removeItem('chave_user_session');
@@ -144,24 +135,106 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Login com Google oficial via Supabase OAuth
-  const signInWithGoogle = async () => {
+  // Login com Google oficial via Supabase OAuth em POPUP (sem recarregar ou redirecionar a aba inteira)
+  const signInWithGoogle = async (): Promise<void> => {
     if (!isSupabaseConfigured) {
       console.error('Supabase não configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');
       throw new Error('Supabase não configurado no ambiente.');
     }
 
-    const { error } = await supabase.auth.signInWithOAuth({
+    const redirectUrl = `${window.location.origin}/auth/callback`;
+
+    // 1. Obter a URL de autenticação OAuth com skipBrowserRedirect: true
+    const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: window.location.origin,
+        redirectTo: redirectUrl,
+        skipBrowserRedirect: true,
+        queryParams: {
+          prompt: 'select_account',
+        },
       },
     });
 
-    if (error) {
-      console.error('Erro ao autenticar com Google no Supabase:', error.message);
-      throw error;
+    if (error || !data?.url) {
+      console.error('Erro ao gerar URL de login com Google no Supabase:', error?.message);
+      throw error || new Error('URL de autenticação não encontrada');
     }
+
+    // 2. Centralizar as dimensões do Popup na tela
+    const width = 500;
+    const height = 620;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
+
+    const popup = window.open(
+      data.url,
+      'supabase-google-auth-popup',
+      `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes,status=yes`
+    );
+
+    if (!popup) {
+      // Caso bloqueador de popups esteja ativo no navegador do usuário
+      console.warn('Popup bloqueado pelo navegador. Utilizando redirecionamento como fallback.');
+      window.location.href = data.url;
+      return;
+    }
+
+    popup.focus();
+
+    // 3. Monitoramento da conclusão do login via postMessage do popup ou fechamento
+    return new Promise<void>((resolve) => {
+      let isCompleted = false;
+
+      const finishLogin = async () => {
+        if (isCompleted) return;
+        isCompleted = true;
+
+        window.removeEventListener('message', handleMessage);
+        if (popupInterval) clearInterval(popupInterval);
+
+        try {
+          const { data: sessionData } = await supabase.auth.getSession();
+          if (sessionData?.session?.user) {
+            const formatted = formatSupabaseUser(sessionData.session.user);
+            setUser(formatted);
+            localStorage.setItem('chave_user_session', JSON.stringify(formatted));
+          }
+        } catch (e) {
+          console.warn('Erro ao atualizar sessão:', e);
+        }
+
+        setShowAuthModal(false);
+        resolve();
+      };
+
+      const handleMessage = (event: MessageEvent) => {
+        if (event.origin !== window.location.origin) return;
+        if (event.data?.type === 'SUPABASE_AUTH_SUCCESS') {
+          finishLogin();
+        }
+      };
+
+      window.addEventListener('message', handleMessage);
+
+      // Verifica periodicamente se o popup foi finalizado/fechado
+      const popupInterval = setInterval(async () => {
+        if (popup.closed) {
+          clearInterval(popupInterval);
+          setTimeout(async () => {
+            if (!isCompleted) {
+              const { data: sessionData } = await supabase.auth.getSession();
+              if (sessionData?.session?.user) {
+                finishLogin();
+              } else {
+                window.removeEventListener('message', handleMessage);
+                resolve();
+              }
+            }
+          }, 400);
+        }
+      }, 500);
+    });
   };
 
   // Magic Link com Supabase OTP
