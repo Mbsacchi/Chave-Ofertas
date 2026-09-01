@@ -57,7 +57,7 @@ import {
 import { CATEGORIES_TREE } from '../data/mockData';
 
 // Whitelist of authorized admin emails
-const ALLOWED_ADMIN_EMAILS = [
+export const ALLOWED_ADMIN_EMAILS = [
   'murilobozolans@gmail.com',
   'chaveofertas0@gmail.com'
 ];

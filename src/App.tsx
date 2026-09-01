@@ -13,7 +13,7 @@ import { AdSensePlaceholder } from './components/AdSensePlaceholder';
 import { SeoFooterContent } from './components/SeoFooterContent';
 import { Footer } from './components/Footer';
 import { SortDropdown } from './components/SortDropdown';
-import { AdminPanel } from './components/AdminPanel';
+import { AdminPanel, ALLOWED_ADMIN_EMAILS } from './components/AdminPanel';
 import { MOCK_PRODUCTS, CATEGORIES_TREE } from './data/mockData';
 import { executeFuzzySearch } from './lib/search/fuzzySearch';
 import { Product, StoreId, SearchState, Coupon } from './types';
@@ -36,7 +36,7 @@ import {
 const ITEMS_PER_PAGE = 16;
 
 export const AppContent: React.FC = () => {
-  const { favorites, showAuthModal, closeAuthModal } = useAuth();
+  const { user, favorites, showAuthModal, closeAuthModal } = useAuth();
   const productSectionRef = useRef<HTMLDivElement>(null);
 
   // Admin View State & Route Sync
@@ -48,6 +48,19 @@ export const AppContent: React.FC = () => {
     }
     return 'vitrine';
   });
+
+  const isAdminUser = Boolean(
+    user?.email &&
+    ALLOWED_ADMIN_EMAILS.includes(user.email.trim().toLowerCase())
+  );
+
+  // Proteção da rota /admin: Redireciona usuários comuns para a vitrine sem destruir a sessão
+  useEffect(() => {
+    if (viewMode === 'admin' && user && !isAdminUser) {
+      window.history.replaceState({}, '', '/');
+      setViewMode('vitrine');
+    }
+  }, [viewMode, user, isAdminUser]);
 
   // Dynamic Live Database Products
   const [liveCustomProducts, setLiveCustomProducts] = useState<Product[]>([]);
@@ -313,8 +326,11 @@ export const AppContent: React.FC = () => {
   const activeCategoryNode = CATEGORIES_TREE.find((c) => c.id === selectedCategory);
   const activeSubcategoryNode = activeCategoryNode?.subcategories.find((s) => s.id === selectedSubcategory);
 
-  // If in Admin route, render secure AdminPanel
+  // If in Admin route, render secure AdminPanel (ou redireciona caso não seja admin)
   if (viewMode === 'admin') {
+    if (user && !isAdminUser) {
+      return null;
+    }
     return (
       <AdminPanel
         onBackToVitrine={navigateToVitrine}
