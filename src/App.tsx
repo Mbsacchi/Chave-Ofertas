@@ -62,6 +62,25 @@ export const AppContent: React.FC = () => {
     }
   }, [viewMode, user, isAdminUser]);
 
+  // Fechamento automático do popup caso esta tela tenha sido carregada dentro da janela de autenticação
+  useEffect(() => {
+    if (
+      typeof window !== 'undefined' &&
+      ((window.opener && window.opener !== window) ||
+        window.name === 'supabase-google-auth-popup')
+    ) {
+      if (window.opener && window.opener !== window) {
+        try {
+          window.opener.postMessage(
+            { type: 'SUPABASE_AUTH_SUCCESS', user },
+            window.location.origin
+          );
+        } catch {}
+      }
+      window.close();
+    }
+  }, [user]);
+
   // Dynamic Live Database Products
   const [liveCustomProducts, setLiveCustomProducts] = useState<Product[]>([]);
   // Dynamic Real Coupons from Supabase (sem mock)

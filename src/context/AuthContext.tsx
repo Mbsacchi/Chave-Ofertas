@@ -108,6 +108,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const formatted = formatSupabaseUser(session.user);
           setUser(formatted);
           localStorage.setItem('chave_user_session', JSON.stringify(formatted));
+
+          // Fecha o popup caso esteja rodando dentro dele
+          if (
+            typeof window !== 'undefined' &&
+            ((window.opener && window.opener !== window) ||
+              window.name === 'supabase-google-auth-popup')
+          ) {
+            if (window.opener && window.opener !== window) {
+              try {
+                window.opener.postMessage(
+                  { type: 'SUPABASE_AUTH_SUCCESS', session },
+                  window.location.origin
+                );
+              } catch {}
+            }
+            window.close();
+          }
         } else if (!session) {
           const saved = localStorage.getItem('chave_user_session');
           if (saved) {
@@ -134,6 +151,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(formatted);
         localStorage.setItem('chave_user_session', JSON.stringify(formatted));
         setShowAuthModal(false);
+
+        // Fecha o popup instantaneamente após capturar a sessão
+        if (
+          typeof window !== 'undefined' &&
+          ((window.opener && window.opener !== window) ||
+            window.name === 'supabase-google-auth-popup')
+        ) {
+          if (window.opener && window.opener !== window) {
+            try {
+              window.opener.postMessage(
+                { type: 'SUPABASE_AUTH_SUCCESS', session },
+                window.location.origin
+              );
+            } catch {}
+          }
+          window.close();
+        }
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         localStorage.removeItem('chave_user_session');

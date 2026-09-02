@@ -40,7 +40,7 @@ export const AuthCallback: React.FC = () => {
         }
 
         // 3. Notifica a janela principal (opener) com os dados da sessão
-        if (window.opener) {
+        if (window.opener && window.opener !== window) {
           try {
             window.opener.postMessage(
               {
@@ -52,17 +52,12 @@ export const AuthCallback: React.FC = () => {
           } catch (postErr) {
             console.warn('Não foi possível enviar postMessage:', postErr);
           }
-
-          // Fecha a janela popup após breve confirmação
-          setTimeout(() => {
-            window.close();
-          }, 500);
-        } else {
-          // Se acessado diretamente sem opener
-          setTimeout(() => {
-            window.location.href = '/';
-          }, 600);
         }
+
+        // 4. Fecha a janela popup instantaneamente
+        setTimeout(() => {
+          window.close();
+        }, 150);
       } catch (err: any) {
         console.error('Exceção no processamento do callback:', err);
         if (isMounted) {
@@ -90,10 +85,10 @@ export const AuthCallback: React.FC = () => {
           <div className="space-y-3 py-4">
             <Loader2 className="w-10 h-10 text-amber-500 animate-spin mx-auto" />
             <h2 className="text-base font-black text-gray-900 dark:text-white">
-              Conectando com o Google...
+              Concluindo login...
             </h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
-              Autenticando sua conta de forma segura no Chave Ofertas.
+              Autenticado com sucesso. Fechando janela...
             </p>
           </div>
         )}
@@ -104,10 +99,10 @@ export const AuthCallback: React.FC = () => {
               <CheckCircle2 className="w-7 h-7 stroke-[2.5]" />
             </div>
             <h2 className="text-base font-black text-emerald-600 dark:text-emerald-400">
-              Login realizado com sucesso!
+              Conectado!
             </h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
-              Esta janela será fechada automaticamente...
+              Fechando janela...
             </p>
           </div>
         )}
