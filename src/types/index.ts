@@ -1,4 +1,4 @@
-export type StoreId = 'amazon' | 'mercadolivre' | 'shopee' | 'magalu' | 'kabum';
+export type StoreId = 'amazon' | 'mercadolivre' | 'shopee' | 'magalu' | 'kabum' | 'aliexpress' | 'awin';
 
 export interface Store {
   id: StoreId;

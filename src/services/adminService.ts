@@ -1187,3 +1187,47 @@ export const syncAwinOffers = async (): Promise<{ count: number; products: Produ
   };
 };
 
+/**
+ * Sincroniza ofertas e produtos da AliExpress via API REST de busca de produtos da Awin
+ */
+export const syncAliExpressOffers = async (): Promise<{ count: number; products: Product[]; message: string }> => {
+  await requireAuthSession();
+
+  let data: any;
+
+  try {
+    const res = await fetch('/api/cron/sync-aliexpress-api?manual=true', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isManual: true }),
+    });
+
+    const text = await res.text();
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Resposta do servidor: ${text.substring(0, 120)}`);
+    }
+
+    if (!res.ok || !data.success) {
+      throw new Error(data?.error || 'Erro ao sincronizar com a API da AliExpress/Awin.');
+    }
+
+    return {
+      count: data.count || data.products?.length || 0,
+      products: data.products || [],
+      message: data.message || `${data.count || 0} ofertas da AliExpress sincronizadas com sucesso!`,
+    };
+  } catch (fetchErr: any) {
+    console.warn('API /api/cron/sync-aliexpress-api offline, executando sincronizador local:', fetchErr.message);
+    const { syncAliExpressFromAwinApi } = await import('../lib/affiliate/awinApiSync');
+    const result = await syncAliExpressFromAwinApi(supabase);
+    return {
+      count: result.count,
+      products: result.products || [],
+      message: result.message,
+    };
+  }
+};
+
+

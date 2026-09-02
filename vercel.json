@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/sync-awin",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/sync-aliexpress-api",
+      "schedule": "0 7 * * *"
     }
   ],
   "headers": [

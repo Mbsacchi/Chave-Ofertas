@@ -41,6 +41,14 @@ export const STORES: Store[] = [
     badgeBg: 'bg-orange-600/10 text-orange-600 border-orange-600/30',
     affiliateTag: 'chaveofertas-kbm-20',
   },
+  {
+    id: 'aliexpress',
+    name: 'AliExpress',
+    logo: 'https://images.unsplash.com/photo-1557821552-17105176677c?w=100&auto=format&fit=crop&q=80',
+    accentColor: '#FF4747',
+    badgeBg: 'bg-red-500/10 text-red-500 border-red-500/30',
+    affiliateTag: 'chaveofertas-ali-20',
+  },
 ];
 
 // 3-Level Mega Menu Hierarchical Categories with Promo Banners

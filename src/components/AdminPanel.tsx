@@ -16,7 +16,8 @@ import {
   removeStoreOfferFromProduct,
   addOfferToExistingProduct,
   fetchAllGlobalProducts,
-  syncAwinOffers
+  syncAwinOffers,
+  syncAliExpressOffers
 } from '../services/adminService';
 import { DraftProduct, Product, StoreId } from '../types';
 import { fuzzyMatch } from '../lib/search/fuzzyMatch';
@@ -114,6 +115,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [manualFreeShipping, setManualFreeShipping] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSyncingAwin, setIsSyncingAwin] = useState(false);
+  const [isSyncingAliExpress, setIsSyncingAliExpress] = useState(false);
 
   // Table Filters & Sorting state (Vitrine Publicada)
   const [tableCategoryFilter, setTableCategoryFilter] = useState('all');
@@ -597,6 +599,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  // Sincronização automática de ofertas da AliExpress via Product Search API da Awin
+  const handleSyncAliExpress = async () => {
+    setIsSyncingAliExpress(true);
+    try {
+      const result = await syncAliExpressOffers();
+      showFeedback('success', result.message || `${result.count} ofertas da AliExpress sincronizadas com sucesso!`);
+      await loadDraftsAndProducts();
+    } catch (err: any) {
+      showFeedback('error', err.message || 'Erro ao sincronizar ofertas da AliExpress via Awin API.');
+    } finally {
+      setIsSyncingAliExpress(false);
+    }
+  };
+
   // Update Draft Fields in Staging
   const handleUpdateDraftField = async (id: string, field: keyof DraftProduct, value: any) => {
     try {
@@ -1049,16 +1065,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     )}
                   </div>
 
-                  {/* BOTÃO DE SINCRONIZAÇÃO AWIN */}
+                  {/* BOTÃO DE SINCRONIZAÇÃO AWIN / KABUM */}
                   <button
                     type="button"
                     onClick={handleSyncAwin}
-                    disabled={isSyncingAwin}
-                    className="py-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition-all shadow-lg shadow-amber-400/20 active:scale-98 disabled:opacity-50 shrink-0"
+                    disabled={isSyncingAwin || isSyncingAliExpress}
+                    className="py-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition-all shadow-lg shadow-amber-400/20 active:scale-98 disabled:opacity-50 shrink-0 cursor-pointer"
                     title="Sincronizar ofertas e cupons da rede de afiliados Awin"
                   >
                     <RefreshCw className={`w-4 h-4 ${isSyncingAwin ? 'animate-spin' : ''}`} />
                     <span>{isSyncingAwin ? 'Sincronizando...' : 'Sincronizar Ofertas Awin'}</span>
+                  </button>
+
+                  {/* BOTÃO DE SINCRONIZAÇÃO ALIEXPRESS (AWIN API) */}
+                  <button
+                    type="button"
+                    onClick={handleSyncAliExpress}
+                    disabled={isSyncingAliExpress || isSyncingAwin}
+                    className="py-3.5 px-4 rounded-2xl bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-400 hover:to-orange-400 text-white font-black text-xs flex items-center justify-center gap-2 transition-all shadow-lg shadow-red-500/20 active:scale-98 disabled:opacity-50 shrink-0 cursor-pointer"
+                    title="Sincronizar ofertas da AliExpress via Product Search API da Awin"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isSyncingAliExpress ? 'animate-spin' : ''}`} />
+                    <span>{isSyncingAliExpress ? 'Sincronizando...' : 'Sincronizar AliExpress (Awin API)'}</span>
                   </button>
                 </div>
 
