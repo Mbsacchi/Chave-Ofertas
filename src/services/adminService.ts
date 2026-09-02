@@ -1,6 +1,7 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { DraftProduct, Product, StoreOffer, StoreId, PriceHistoryPoint } from '../types';
 import { MOCK_PRODUCTS } from '../data/mockData';
+import { groupAndConsolidateProducts } from '../lib/comparator/productGrouper';
 
 // Local authenticated session cache for fallback when Supabase tables are initializing
 const LOCAL_DRAFTS_STORAGE_KEY = 'chave_ofertas_admin_drafts_v1';
@@ -589,7 +590,8 @@ export const fetchAllGlobalProducts = async (): Promise<Product[]> => {
     }
   });
 
-  return Array.from(combinedMap.values());
+  // 4. Aplica agrupador comparativo de ofertas multilojas (EAN, SKU e Slug compatível)
+  return groupAndConsolidateProducts(Array.from(combinedMap.values()));
 };
 
 /**

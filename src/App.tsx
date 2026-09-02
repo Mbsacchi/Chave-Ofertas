@@ -16,6 +16,7 @@ import { SortDropdown } from './components/SortDropdown';
 import { AdminPanel, ALLOWED_ADMIN_EMAILS } from './components/AdminPanel';
 import { MOCK_PRODUCTS, CATEGORIES_TREE } from './data/mockData';
 import { executeFuzzySearch } from './lib/search/fuzzySearch';
+import { groupAndConsolidateProducts } from './lib/comparator/productGrouper';
 import { Product, StoreId, SearchState, Coupon } from './types';
 import { fetchLiveDatabaseProducts } from './services/adminService';
 import { fetchActiveCoupons } from './services/couponService';
@@ -142,12 +143,17 @@ export const AppContent: React.FC = () => {
     setLiveCustomProducts(prev => [newProd, ...prev]);
   };
 
-  // Combined product catalog (Live database products take precedence)
+  // Combined product catalog with Multi-Store Comparator Consolidation (EAN, SKU, Slug)
   const allProducts = useMemo(() => {
-    if (liveCustomProducts.length === 0) return MOCK_PRODUCTS;
-    const existingIds = new Set(liveCustomProducts.map(p => p.id));
-    const remainingMock = MOCK_PRODUCTS.filter(p => !existingIds.has(p.id));
-    return [...liveCustomProducts, ...remainingMock];
+    let rawList: Product[];
+    if (liveCustomProducts.length === 0) {
+      rawList = MOCK_PRODUCTS;
+    } else {
+      const existingIds = new Set(liveCustomProducts.map(p => p.id));
+      const remainingMock = MOCK_PRODUCTS.filter(p => !existingIds.has(p.id));
+      rawList = [...liveCustomProducts, ...remainingMock];
+    }
+    return groupAndConsolidateProducts(rawList);
   }, [liveCustomProducts]);
 
   // Trending products ordered by clickCount descending for the '🔥 Em Alta' showcase

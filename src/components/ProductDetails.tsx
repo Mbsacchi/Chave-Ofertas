@@ -7,6 +7,7 @@ import {
   Check,
   Flame,
   ArrowLeft,
+  Zap,
 } from 'lucide-react';
 import { Product } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -177,44 +178,62 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
       {/* 3. Gráfico de Evolução de Preços Interativo (Recharts) */}
       <PriceHistoryChart product={product} />
 
-      {/* 4. Comparativo de Lojas */}
-      <div className="space-y-4">
-        <h3 className="text-sm sm:text-base font-black uppercase tracking-wider text-gray-900 dark:text-white flex items-center gap-2">
-          <Tag className="w-4 h-4 text-amber-500" />
-          <span>Comparativo de Lojas ({offersSorted.length} Ofertas)</span>
-        </h3>
+      {/* 4. Comparativo Multilojas: Outras opções de compra */}
+      <div className="space-y-4 pt-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 border-b border-gray-100 dark:border-dark-border pb-3">
+          <h3 className="text-base sm:text-lg font-black uppercase tracking-wider text-gray-900 dark:text-white flex items-center gap-2">
+            <Tag className="w-5 h-5 text-amber-500" />
+            <span>Outras opções de compra</span>
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300">
+              {offersSorted.length} {offersSorted.length === 1 ? 'loja encontrada' : 'lojas comparadas'}
+            </span>
+          </h3>
+          <span className="text-[11px] text-gray-400 font-medium">
+            Ordenadas do menor para o maior preço
+          </span>
+        </div>
 
         <div className="grid grid-cols-1 gap-3">
           {offersSorted.map((offer, idx) => {
             const isBest = idx === 0;
             const isCopied = copiedOfferId === offer.id;
             const isRevealed = revealedOfferCoupons[offer.id];
+            const diffPrice = offer.price - bestOffer.price;
 
             return (
               <div
                 key={offer.id}
                 className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 ${
                   isBest
-                    ? 'bg-emerald-50/30 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-800'
-                    : 'bg-gray-50/50 dark:bg-dark-card border-gray-200 dark:border-dark-border'
+                    ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-800 shadow-sm'
+                    : 'bg-gray-50/60 dark:bg-dark-card border-gray-200 dark:border-dark-border hover:border-gray-300'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-white dark:bg-dark-surface border border-gray-200 dark:border-dark-border flex items-center justify-center font-black text-xs text-gray-900 dark:text-white shrink-0">
-                    {offer.storeName.slice(0, 3).toUpperCase()}
+                  <div className="w-11 h-11 rounded-xl bg-white dark:bg-dark-surface border border-gray-200 dark:border-dark-border flex items-center justify-center font-black text-xs text-gray-900 dark:text-white shrink-0 overflow-hidden p-1 shadow-sm">
+                    {offer.storeLogo ? (
+                      <img src={offer.storeLogo} alt={offer.storeName} className="w-full h-full object-contain" />
+                    ) : (
+                      offer.storeName.slice(0, 3).toUpperCase()
+                    )}
                   </div>
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-extrabold text-sm text-gray-900 dark:text-white">
                         {offer.storeName}
                       </span>
-                      {isBest && (
-                        <span className="px-2 py-0.2 rounded-md bg-emerald-500 text-white font-black text-[9px] uppercase">
-                          Melhor Oferta
+                      {isBest ? (
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-500 text-white font-black text-[9px] uppercase tracking-wider shadow-sm flex items-center gap-1">
+                          <Zap className="w-2.5 h-2.5 fill-current" />
+                          <span>Menor Preço</span>
                         </span>
-                      )}
+                      ) : diffPrice > 0 ? (
+                        <span className="text-[11px] text-gray-500 dark:text-gray-400 font-semibold">
+                          (+ R$ {diffPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})
+                        </span>
+                      ) : null}
                     </div>
-                    <span className="text-[11px] text-gray-500 dark:text-gray-400 block">
+                    <span className="text-[11px] text-gray-500 dark:text-gray-400 block pt-0.5">
                       {offer.installment || 'À vista'} • {offer.freeShipping ? 'Frete Grátis' : 'Consultar frete'}
                     </span>
                   </div>
@@ -222,7 +241,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
 
                 <div className="flex items-center justify-between sm:justify-end gap-4">
                   <div className="text-right">
-                    <span className="text-lg font-black text-gray-900 dark:text-white block">
+                    <span className="text-lg sm:text-xl font-black text-gray-900 dark:text-white block">
                       R$ {offer.price.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </span>
                     {offer.couponCode && (

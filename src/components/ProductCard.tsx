@@ -203,19 +203,28 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
 
           {/* Other stores snippet */}
-          <div className="flex items-center gap-1 text-[10px] text-gray-400 overflow-hidden whitespace-nowrap">
-            <span className="font-medium shrink-0">Também em:</span>
-            {product.offers.slice(1, 3).map((off) => (
-              <span
-                key={off.id}
-                className="px-1.5 py-0.2 rounded bg-gray-100 dark:bg-dark-surface text-gray-600 dark:text-gray-300 font-semibold truncate"
-              >
-                {off.storeName.split(' ')[0]}: R$ {off.price.toFixed(0)}
-              </span>
-            ))}
-            {product.offers.length > 3 && (
-              <span className="text-amber-500 font-bold shrink-0">
-                +{product.offers.length - 3}
+          <div className="flex items-center gap-1 text-[10px] text-gray-400 overflow-hidden whitespace-nowrap min-h-[1.25rem]">
+            {product.offers && product.offers.length > 1 ? (
+              <>
+                <span className="font-medium shrink-0">Também em:</span>
+                {product.offers.slice(1, 3).map((off) => (
+                  <span
+                    key={off.id}
+                    className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-dark-surface text-gray-600 dark:text-gray-300 font-semibold truncate"
+                  >
+                    {off.storeName.split(' ')[0]}: R$ {off.price.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
+                  </span>
+                ))}
+                {product.offers.length > 3 && (
+                  <span className="text-amber-500 font-bold shrink-0">
+                    +{product.offers.length - 3}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1 text-[10px]">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>
+                <span className="truncate">Menor preço monitorado nesta loja</span>
               </span>
             )}
           </div>
