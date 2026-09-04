@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { X, ExternalLink, ShieldCheck, Tag, Star, Truck, CreditCard, Heart, Bell, Check, Flame, Clock, Zap } from 'lucide-react';
+import { X, ExternalLink, ShieldCheck, Tag, Star, Truck, CreditCard, Heart, Bell, Check, Flame, Clock, Zap, Layers } from 'lucide-react';
 import { Product } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { sanitizeUrl } from '../lib/security/sanitizer';
 import { PriceHistoryChart } from './PriceHistoryChart';
 import { incrementProductClick } from '../services/productAnalyticsService';
+import { useProductSeo, generateProductJsonLd } from '../lib/seo/productSeo';
 
 interface PriceComparisonModalProps {
   product: Product | null;
@@ -17,6 +18,10 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
   onClose,
   onOpenAlert,
 }) => {
+  // Geração Dinâmica de Metadados e JSON-LD
+  useProductSeo(product);
+  const jsonLd = product ? generateProductJsonLd(product) : null;
+
   const { toggleFavorite, isFavorited, hasActiveAlert } = useAuth();
 
   if (!product) return null;
@@ -51,10 +56,22 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 bg-black/80 backdrop-blur-md animate-fade-in overflow-y-auto">
-      <div 
+      <article 
+        role="article"
+        aria-label={`Detalhes e Comparador de Preços: ${product.title}`}
+        itemScope
+        itemType="https://schema.org/Product"
         className="relative w-full max-h-[92vh] sm:max-h-[90vh] sm:max-w-4xl bg-white dark:bg-dark-surface border-t sm:border border-gray-200 dark:border-dark-border rounded-t-3xl sm:rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl overflow-y-auto scrollbar-thin my-0 sm:my-auto flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Schema Markup JSON-LD (Product + AggregateOffer) */}
+        {jsonLd && (
+          <script
+            type="application/ld+json"
+            dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+          />
+        )}
+
         {/* Close Button */}
         <button
           onClick={onClose}
@@ -65,7 +82,7 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
         </button>
 
         {/* 1. Header Product Summary */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-6 pb-6 border-b border-gray-100 dark:border-dark-border/60">
+        <header className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-6 pb-6 border-b border-gray-100 dark:border-dark-border/60">
           {/* Image Container with Psychological Urgency Badge */}
           <div className="md:col-span-4 bg-gray-50/80 dark:bg-dark-card rounded-2xl p-4 flex items-center justify-center relative border border-gray-100 dark:border-dark-border/40 group">
             {/* Urgency Badge */}
@@ -203,18 +220,68 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
               </div>
             </div>
           </div>
-        </div>
+        </header>
+
+        {/* Specifications Table (Semantic for SEO / GEO) */}
+        <section aria-labelledby="modal-specs-heading" className="my-3 space-y-2">
+          <h3 id="modal-specs-heading" className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-gray-900 dark:text-white flex items-center gap-2">
+            <Layers className="w-4 h-4 text-amber-500" />
+            <span>Ficha Técnica e Especificações</span>
+          </h3>
+          <div className="overflow-hidden rounded-2xl border border-gray-100 dark:border-dark-border bg-gray-50/40 dark:bg-dark-card/40">
+            <table className="w-full text-xs text-left border-collapse">
+              <caption className="sr-only">Especificações técnicas de {product.title}</caption>
+              <tbody>
+                <tr className="border-b border-gray-100 dark:border-dark-border">
+                  <th scope="row" className="py-2 px-3 font-bold text-gray-500 dark:text-gray-400 w-1/3 bg-gray-100/40 dark:bg-dark-surface/40">Marca</th>
+                  <td className="py-2 px-3 font-medium text-gray-900 dark:text-white">{product.brand}</td>
+                </tr>
+                <tr className="border-b border-gray-100 dark:border-dark-border">
+                  <th scope="row" className="py-2 px-3 font-bold text-gray-500 dark:text-gray-400 bg-gray-100/40 dark:bg-dark-surface/40">Categoria</th>
+                  <td className="py-2 px-3 font-medium text-gray-900 dark:text-white">{product.categoryName}</td>
+                </tr>
+                <tr className="border-b border-gray-100 dark:border-dark-border">
+                  <th scope="row" className="py-2 px-3 font-bold text-gray-500 dark:text-gray-400 bg-gray-100/40 dark:bg-dark-surface/40">Menor Preço</th>
+                  <td className="py-2 px-3 font-extrabold text-emerald-600 dark:text-emerald-400">R$ {product.minPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} ({product.bestStore})</td>
+                </tr>
+                {product.ean && (
+                  <tr className="border-b border-gray-100 dark:border-dark-border">
+                    <th scope="row" className="py-2 px-3 font-bold text-gray-500 dark:text-gray-400 bg-gray-100/40 dark:bg-dark-surface/40">Código EAN</th>
+                    <td className="py-2 px-3 font-mono text-gray-900 dark:text-white">{product.ean}</td>
+                  </tr>
+                )}
+                <tr>
+                  <th scope="row" className="py-2 px-3 font-bold text-gray-500 dark:text-gray-400 bg-gray-100/40 dark:bg-dark-surface/40">Garantia</th>
+                  <td className="py-2 px-3 font-medium text-gray-900 dark:text-white flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 inline" />
+                    <span>Produto Novo e Lacrado com Garantia da Loja Parceira</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
 
         {/* Recharts Interactive Price History */}
-        <div className="my-4 sm:my-6">
+        <section aria-labelledby="modal-chart-heading" className="my-3">
+          <h3 id="modal-chart-heading" className="sr-only">Histórico de Preços</h3>
           <PriceHistoryChart product={product} />
-        </div>
+        </section>
 
         {/* Store Comparison - Mobile-first stacked cards */}
-        <div>
-          <h3 className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-gray-900 dark:text-white mb-3">
-            Comparativo de Lojas Parceiras ({offersSorted.length} Ofertas Disponíveis)
-          </h3>
+        <section aria-labelledby="modal-comparator-heading" className="space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 border-b border-gray-100 dark:border-dark-border pb-2">
+            <h3 id="modal-comparator-heading" className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-gray-900 dark:text-white flex items-center gap-2">
+              <Tag className="w-4 h-4 text-amber-500" />
+              <span>Outras opções de compra</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300">
+                {offersSorted.length} {offersSorted.length === 1 ? 'loja encontrada' : 'lojas comparadas'}
+              </span>
+            </h3>
+            <span className="text-[10px] text-gray-400 font-medium">
+              Ordenadas do menor para o maior preço
+            </span>
+          </div>
 
           <div className="space-y-3">
             {offersSorted.map((offer, index) => {
@@ -325,8 +392,8 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
               );
             })}
           </div>
-        </div>
-      </div>
+        </section>
+      </article>
     </div>
   );
 };

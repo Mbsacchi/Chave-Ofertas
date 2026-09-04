@@ -192,6 +192,40 @@ export const AppContent: React.FC = () => {
   const [comparingProduct, setComparingProduct] = useState<Product | null>(null);
   const [alertProduct, setAlertProduct] = useState<Product | null>(null);
 
+  const handleOpenProduct = (prod: Product) => {
+    setComparingProduct(prod);
+    const slug = prod.slug || prod.id;
+    if (slug) {
+      window.history.pushState({ slug }, '', `/produto/${slug}`);
+    }
+  };
+
+  const handleCloseProduct = () => {
+    setComparingProduct(null);
+    if (window.location.pathname.startsWith('/produto/')) {
+      window.history.pushState({}, '', '/');
+    }
+  };
+
+  // Sincronização de URL deep-linking e popstate para /produto/[slug]
+  useEffect(() => {
+    const handleProductRoute = () => {
+      const pathname = window.location.pathname;
+      if (pathname.startsWith('/produto/')) {
+        const slug = pathname.replace(/^\/produto\//, '').replace(/\/$/, '');
+        const matched = allProducts.find((p) => p.slug === slug || p.id === slug);
+        if (matched) {
+          setComparingProduct(matched);
+        }
+      }
+    };
+
+    window.addEventListener('popstate', handleProductRoute);
+    handleProductRoute();
+
+    return () => window.removeEventListener('popstate', handleProductRoute);
+  }, [allProducts]);
+
   // Lock body scroll whenever any drawer, bottom sheet, or modal is open
   const isAnyOverlayOpen =
     isMobileDrawerOpen ||
@@ -209,7 +243,7 @@ export const AppContent: React.FC = () => {
     isMobileFilterOpen,
     onCloseMobileFilter: () => setIsMobileFilterOpen(false),
     comparingProduct,
-    onCloseComparingProduct: () => setComparingProduct(null),
+    onCloseComparingProduct: handleCloseProduct,
     alertProduct,
     onCloseAlertProduct: () => setAlertProduct(null),
     showAuthModal,
@@ -304,7 +338,7 @@ export const AppContent: React.FC = () => {
   // Filtered real coupons (Direto do Supabase)
   const filteredCoupons = useMemo(() => {
     return realCoupons.filter((coupon) => {
-      if (selectedStores.length > 0 && coupon.storeId && !selectedStores.includes(coupon.storeId)) return false;
+      if (selectedStores.length > 0 && coupon.storeId && !selectedStores.includes(coupon.storeId as StoreId)) return false;
       if (selectedCategory !== 'all' && coupon.categoryId && coupon.categoryId !== selectedCategory) return false;
       return true;
     });
@@ -563,7 +597,7 @@ export const AppContent: React.FC = () => {
                           <ProductCard
                             product={trendProd}
                             isFeatured={rankIdx === 0}
-                            onOpenCompare={setComparingProduct}
+                            onOpenCompare={handleOpenProduct}
                             onOpenAlert={setAlertProduct}
                           />
                         </div>
@@ -613,7 +647,7 @@ export const AppContent: React.FC = () => {
                                 <ProductCard
                                   product={product}
                                   isFeatured={index === 0 && currentPage === 1 && selectedCategory === 'all' && selectedBrands.length === 0 && !searchQuery}
-                                  onOpenCompare={setComparingProduct}
+                                  onOpenCompare={handleOpenProduct}
                                   onOpenAlert={setAlertProduct}
                                 />
                               </div>
@@ -781,7 +815,7 @@ export const AppContent: React.FC = () => {
                       <div key={product.id} className="w-full flex flex-col">
                         <ProductCard
                           product={product}
-                          onOpenCompare={setComparingProduct}
+                          onOpenCompare={handleOpenProduct}
                           onOpenAlert={setAlertProduct}
                         />
                       </div>
@@ -806,9 +840,9 @@ export const AppContent: React.FC = () => {
       {/* Modals */}
       <PriceComparisonModal
         product={comparingProduct}
-        onClose={() => setComparingProduct(null)}
+        onClose={handleCloseProduct}
         onOpenAlert={(p) => {
-          setComparingProduct(null);
+          handleCloseProduct();
           setAlertProduct(p);
         }}
       />

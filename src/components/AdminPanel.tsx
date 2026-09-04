@@ -17,9 +17,17 @@ import {
   addOfferToExistingProduct,
   fetchAllGlobalProducts,
   syncAwinOffers,
-  syncAliExpressOffers
+  syncAliExpressOffers,
+  syncAwinCouponsOffers
 } from '../services/adminService';
-import { DraftProduct, Product, StoreId } from '../types';
+import { 
+  fetchAllAdminCoupons, 
+  saveAdminCoupon, 
+  deleteAdminCoupon, 
+  toggleCouponActive 
+} from '../services/couponService';
+import { parseCurrencyBRL, formatCurrencyBRL } from '../utils/priceFormatter';
+import { DraftProduct, Product, StoreId, Coupon } from '../types';
 import { fuzzyMatch } from '../lib/search/fuzzyMatch';
 import { 
   ShieldCheck, 
@@ -40,6 +48,9 @@ import {
   Sparkles, 
   ImageIcon, 
   Tag, 
+  Ticket,
+  Scissors,
+  Calendar,
   DollarSign, 
   Link as LinkIcon, 
   Truck, 
@@ -64,11 +75,12 @@ export const ALLOWED_ADMIN_EMAILS = [
 ];
 
 const POPULAR_STORES = [
-  { id: 'mercadolivre', name: 'Mercado Livre' },
-  { id: 'amazon', name: 'Amazon' },
-  { id: 'shopee', name: 'Shopee' },
-  { id: 'magalu', name: 'Magazine Luiza' },
-  { id: 'kabum', name: 'KaBuM!' },
+  { id: 'mercadolivre', name: 'Mercado Livre', color: '#FFE600' },
+  { id: 'amazon', name: 'Amazon', color: '#FF9900' },
+  { id: 'aliexpress', name: 'AliExpress', color: '#FF4747' },
+  { id: 'shopee', name: 'Shopee', color: '#EE4D2D' },
+  { id: 'magalu', name: 'Magazine Luiza', color: '#0086FF' },
+  { id: 'kabum', name: 'KaBuM!', color: '#FF6500' },
 ];
 
 interface AdminPanelProps {
@@ -88,12 +100,45 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Active view tab in admin
-  const [activeTab, setActiveTab] = useState<'create' | 'staging' | 'published' | 'sql'>('create');
+  const [activeTab, setActiveTab] = useState<'create' | 'staging' | 'published' | 'coupons' | 'sql'>('create');
 
   // Staging Drafts & Published state
   const [drafts, setDrafts] = useState<DraftProduct[]>([]);
   const [draftsLoading, setDraftsLoading] = useState(false);
   const [publishedProducts, setPublishedProducts] = useState<Product[]>([]);
+
+  // Coupons State
+  const [adminCoupons, setAdminCoupons] = useState<Coupon[]>([]);
+  const [couponsLoading, setCouponsLoading] = useState(false);
+  const [isSyncingCoupons, setIsSyncingCoupons] = useState(false);
+  const [couponSearchQuery, setCouponSearchQuery] = useState('');
+  const [couponStoreFilter, setCouponStoreFilter] = useState('all');
+  const [couponStatusFilter, setCouponStatusFilter] = useState<'all' | 'active' | 'expired'>('all');
+  const [copiedCouponCode, setCopiedCouponCode] = useState<string | null>(null);
+
+  // Coupon Modal & Form State
+  const [isCouponModalOpen, setIsCouponModalOpen] = useState(false);
+  const [couponForm, setCouponForm] = useState<{
+    id?: string;
+    store_id: string;
+    code: string;
+    description: string;
+    discount_amount: string;
+    starts_at: string;
+    ends_at: string;
+    awin_tracking_url: string;
+    is_active: boolean;
+  }>({
+    store_id: 'aliexpress',
+    code: '',
+    description: '',
+    discount_amount: '',
+    starts_at: '',
+    ends_at: '',
+    awin_tracking_url: '',
+    is_active: true,
+  });
+  const [isSavingCoupon, setIsSavingCoupon] = useState(false);
 
   // Autocomplete Search states with Fuzzy Search support
   const [searchQuery, setSearchQuery] = useState('');
@@ -117,10 +162,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isSyncingAwin, setIsSyncingAwin] = useState(false);
   const [isSyncingAliExpress, setIsSyncingAliExpress] = useState(false);
 
-  // Table Filters & Sorting state (Vitrine Publicada)
+  // Table Filters, Search & Sorting state (Vitrine Publicada)
+  const [tableSearchQuery, setTableSearchQuery] = useState('');
   const [tableCategoryFilter, setTableCategoryFilter] = useState('all');
   const [tableStoreFilter, setTableStoreFilter] = useState('all');
   const [tableSortBy, setTableSortBy] = useState<'name-asc' | 'name-desc' | 'price-asc' | 'price-desc'>('name-asc');
+
+  // Cache de rascunhos de ofertas por loja no formulário atual
+  const [draftStoreOffers, setDraftStoreOffers] = useState<
+    Record<string, { price: string; originalPrice: string; affiliateUrl: string; freeShipping: boolean }>
+  >({});
 
   // Action status feedbacks
   const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -161,6 +212,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   useEffect(() => {
     if (sessionUser && isAuthorizedAdmin) {
       loadDraftsAndProducts();
+      loadAdminCoupons();
     }
   }, [sessionUser, isAuthorizedAdmin]);
 
@@ -190,6 +242,153 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setDraftsLoading(false);
     }
   };
+
+  const loadAdminCoupons = async () => {
+    setCouponsLoading(true);
+    try {
+      const data = await fetchAllAdminCoupons();
+      setAdminCoupons(data);
+    } catch (err: any) {
+      console.error('Falha ao carregar cupons:', err);
+    } finally {
+      setCouponsLoading(false);
+    }
+  };
+
+  const handleSyncCoupons = async () => {
+    setIsSyncingCoupons(true);
+    try {
+      const res = await syncAwinCouponsOffers();
+      showFeedback('success', `🎉 ${res.message}`);
+      await loadAdminCoupons();
+    } catch (err: any) {
+      showFeedback('error', `Falha ao sincronizar cupons: ${err.message}`);
+    } finally {
+      setIsSyncingCoupons(false);
+    }
+  };
+
+  const handleOpenCreateCoupon = () => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+    setCouponForm({
+      store_id: 'aliexpress',
+      code: '',
+      description: '',
+      discount_amount: '',
+      starts_at: todayStr,
+      ends_at: nextMonth,
+      awin_tracking_url: '',
+      is_active: true,
+    });
+    setIsCouponModalOpen(true);
+  };
+
+  const handleOpenEditCoupon = (coup: Coupon) => {
+    setCouponForm({
+      id: coup.id,
+      store_id: coup.store_id || (coup.storeName?.toLowerCase().includes('ali') ? 'aliexpress' : 'kabum'),
+      code: coup.code,
+      description: coup.description,
+      discount_amount: (coup.discount_amount || coup.discountValue || '').toString(),
+      starts_at: coup.starts_at ? coup.starts_at.split('T')[0] : '',
+      ends_at: (coup.ends_at || coup.validUntil) ? (coup.ends_at || coup.validUntil)!.split('T')[0] : '',
+      awin_tracking_url: coup.awin_tracking_url || coup.trackingUrl || '',
+      is_active: coup.isActive !== false && coup.is_active !== false,
+    });
+    setIsCouponModalOpen(true);
+  };
+
+  const handleSaveCoupon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!couponForm.code.trim()) {
+      showFeedback('error', 'O código do cupom é obrigatório.');
+      return;
+    }
+    if (!couponForm.awin_tracking_url.trim()) {
+      showFeedback('error', 'O link de afiliado Awin é obrigatório.');
+      return;
+    }
+
+    setIsSavingCoupon(true);
+    try {
+      await saveAdminCoupon(couponForm);
+      showFeedback('success', couponForm.id ? 'Cupom atualizado com sucesso!' : 'Novo cupom cadastrado com sucesso!');
+      setIsCouponModalOpen(false);
+      await loadAdminCoupons();
+    } catch (err: any) {
+      showFeedback('error', `Erro ao salvar cupom: ${err.message}`);
+    } finally {
+      setIsSavingCoupon(false);
+    }
+  };
+
+  const handleDeleteCoupon = async (id: string, code: string) => {
+    if (!window.confirm(`Tem certeza que deseja excluir o cupom "${code}"?`)) {
+      return;
+    }
+    try {
+      await deleteAdminCoupon(id);
+      showFeedback('success', `Cupom "${code}" excluído com sucesso.`);
+      await loadAdminCoupons();
+    } catch (err: any) {
+      showFeedback('error', `Erro ao excluir cupom: ${err.message}`);
+    }
+  };
+
+  const handleToggleCouponActive = async (id: string, currentStatus: boolean) => {
+    try {
+      await toggleCouponActive(id, !currentStatus);
+      setAdminCoupons(prev => prev.map(c => c.id === id ? { ...c, isActive: !currentStatus, is_active: !currentStatus } : c));
+      showFeedback('success', !currentStatus ? 'Cupom ativado!' : 'Cupom pausado/inativado.');
+    } catch (err: any) {
+      showFeedback('error', `Erro ao alterar status: ${err.message}`);
+    }
+  };
+
+  const handleCopyCouponCode = (code: string) => {
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(code).catch(() => {});
+      setCopiedCouponCode(code);
+      setTimeout(() => setCopiedCouponCode(null), 2500);
+    }
+  };
+
+  const filteredCoupons = useMemo(() => {
+    const query = couponSearchQuery.toLowerCase().trim();
+    const now = new Date();
+
+    return adminCoupons.filter(c => {
+      // Filtro de Loja
+      if (couponStoreFilter !== 'all') {
+        const storeMatch = (c.store_id || '').toLowerCase() === couponStoreFilter || 
+                           (c.storeName || '').toLowerCase().includes(couponStoreFilter);
+        if (!storeMatch) return false;
+      }
+
+      // Filtro de Status
+      if (couponStatusFilter === 'active') {
+        const isAct = c.isActive !== false && c.is_active !== false;
+        const notExp = !c.ends_at || new Date(c.ends_at) >= now;
+        if (!isAct || !notExp) return false;
+      } else if (couponStatusFilter === 'expired') {
+        const isExp = c.ends_at && new Date(c.ends_at) < now;
+        const isInactive = c.isActive === false || c.is_active === false;
+        if (!isExp && !isInactive) return false;
+      }
+
+      // Busca textual
+      if (query) {
+        const matchCode = (c.code || '').toLowerCase().includes(query);
+        const matchDesc = (c.description || '').toLowerCase().includes(query);
+        const matchStore = (c.storeName || '').toLowerCase().includes(query);
+        const matchDisc = (c.discount_amount || '').toString().toLowerCase().includes(query);
+        if (!matchCode && !matchDesc && !matchStore && !matchDisc) return false;
+      }
+
+      return true;
+    });
+  }, [adminCoupons, couponSearchQuery, couponStoreFilter, couponStatusFilter]);
 
   const showFeedback = (type: 'success' | 'error', message: string) => {
     setActionFeedback({ type, message });
@@ -243,11 +442,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     showFeedback('success', 'Sessão encerrada com sucesso.');
   };
 
-  // Helper to parse numeric float
-  const parseNum = (str: string) => {
-    const clean = str.toString().replace(/[^\d.,]/g, '').replace(',', '.');
-    const val = parseFloat(clean);
-    return isNaN(val) ? 0 : val;
+  // Helper to parse numeric float avoiding commas/dots currency conversion bugs
+  const parseNum = (str: string | number) => {
+    return parseCurrencyBRL(str);
   };
 
   // Discount calculation formula
@@ -277,31 +474,58 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const currentStoreHasOffer = Boolean(currentStoreOffer);
 
-  // 1. ISOLAMENTO DE OFERTAS: Troca de loja no formulário
+  // 1. ISOLAMENTO DE OFERTAS: Troca de loja no formulário com reset e preservação segura de dados
   const handleStoreSelect = (newStoreName: string) => {
-    setManualStoreName(newStoreName);
+    // 1.1. Salva o rascunho temporário da loja atual se houver preço ou link digitados
+    if (manualStoreName.trim()) {
+      const currentKey = manualStoreName.trim().toLowerCase();
+      setDraftStoreOffers((prev) => ({
+        ...prev,
+        [currentKey]: {
+          price: manualPrice,
+          originalPrice: manualOriginalPrice,
+          affiliateUrl: manualAffiliateUrl,
+          freeShipping: manualFreeShipping,
+        },
+      }));
+    }
 
+    setManualStoreName(newStoreName);
+    const targetKey = newStoreName.trim().toLowerCase();
+
+    // 1.2. Se o produto ativo (editando ou linkando) já possui oferta dessa loja no banco/objeto, carrega os dados oficiais dele
     if (activeProduct && activeProduct.offers) {
       const match = activeProduct.offers.find(
-        (o) => o.storeName.toLowerCase() === newStoreName.trim().toLowerCase()
+        (o) => o.storeName.toLowerCase() === targetKey
       );
 
       if (match) {
-        // Se a loja já existe no produto, preenche os campos com os dados dela
         setManualOriginalPrice(match.originalPrice ? match.originalPrice.toString() : '');
         setManualPrice(match.price ? match.price.toString() : '');
         setManualAffiliateUrl(match.affiliateUrl || '');
         setManualFreeShipping(match.freeShipping ?? true);
         showFeedback('success', `Carregando oferta existente da loja "${newStoreName}".`);
-      } else {
-        // Se não existe, limpa os campos para adicionar nova loja ao produto
-        setManualOriginalPrice('');
-        setManualPrice('');
-        setManualAffiliateUrl('');
-        setManualFreeShipping(true);
-        showFeedback('success', `Loja "${newStoreName}" ainda não cadastrada. Preencha os campos para adicioná-la.`);
+        return;
       }
     }
+
+    // 1.3. Se o usuário já digitou valores para essa loja neste formulário antes de trocar, restaura os dados
+    if (draftStoreOffers[targetKey]) {
+      const draft = draftStoreOffers[targetKey];
+      setManualOriginalPrice(draft.originalPrice);
+      setManualPrice(draft.price);
+      setManualAffiliateUrl(draft.affiliateUrl);
+      setManualFreeShipping(draft.freeShipping);
+      showFeedback('success', `Restaurando dados inseridos para "${newStoreName}".`);
+      return;
+    }
+
+    // 1.4. Caso contrário, limpa/reseta os campos de preço e link para cadastrar a nova loja do zero!
+    setManualOriginalPrice('');
+    setManualPrice('');
+    setManualAffiliateUrl('');
+    setManualFreeShipping(true);
+    showFeedback('success', `Loja "${newStoreName}" selecionada. Preencha os campos para cadastrá-la.`);
   };
 
   // 2. BUSCA APROXIMADA (FUZZY SEARCH COM LEVENSHTEIN) NO AUTOCOMPLETE
@@ -370,6 +594,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setManualImageUrl('');
     setManualAffiliateUrl('');
     setManualFreeShipping(true);
+    setDraftStoreOffers({});
   };
 
   // Submit Form: Add Offer to Existing Product OR Save New Draft OR Update Published Product
@@ -458,6 +683,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         const rawStore = manualStoreName.toLowerCase().replace(/\s+/g, '');
         let storeId: StoreId = 'mercadolivre';
         if (rawStore.includes('amazon')) storeId = 'amazon';
+        else if (rawStore.includes('aliexpress') || rawStore.includes('ali')) storeId = 'aliexpress';
         else if (rawStore.includes('shopee')) storeId = 'shopee';
         else if (rawStore.includes('magalu') || rawStore.includes('magazine')) storeId = 'magalu';
         else if (rawStore.includes('kabum')) storeId = 'kabum';
@@ -693,6 +919,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           ) || p.bestStore?.toLowerCase() === tableStoreFilter.toLowerCase();
           if (!hasStore) return false;
         }
+        // 3. Filtrar por Busca de Texto (Nome do Produto, Marca ou SKU)
+        if (tableSearchQuery.trim()) {
+          const q = tableSearchQuery.toLowerCase().trim();
+          const matchesTitle = p.title.toLowerCase().includes(q);
+          const matchesBrand = p.brand?.toLowerCase().includes(q);
+          const matchesSku = p.sku?.toLowerCase().includes(q);
+          const matchesStore = p.offers?.some(o => o.storeName.toLowerCase().includes(q)) || p.bestStore?.toLowerCase().includes(q);
+          if (!matchesTitle && !matchesBrand && !matchesSku && !matchesStore) return false;
+        }
         return true;
       })
       .sort((a, b) => {
@@ -717,7 +952,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             return 0;
         }
       });
-  }, [publishedProducts, tableCategoryFilter, tableStoreFilter, tableSortBy]);
+  }, [publishedProducts, tableCategoryFilter, tableStoreFilter, tableSortBy, tableSearchQuery]);
 
   // Loading indicator
   if (authLoading) {
@@ -1006,6 +1241,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </button>
 
           <button
+            onClick={() => {
+              setActiveTab('coupons');
+              loadAdminCoupons();
+            }}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'coupons'
+                ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-400/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Ticket className="w-4 h-4" />
+            <span>Gerenciar Cupons</span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-950 text-amber-400">
+              {adminCoupons.length}
+            </span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('sql')}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
               activeTab === 'sql'
@@ -1121,7 +1374,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           </p>
                           <div className="flex items-center gap-2 mt-0.5">
                             <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-extrabold">
-                              Menor Preço: R$ {prod.minPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              Menor Preço: {formatCurrencyBRL(prod.minPrice)}
                             </span>
                             <span className="text-[10px] text-gray-400 dark:text-slate-400">
                               • {prod.offers?.length || 1} loja(s) vinculada(s)
@@ -1289,12 +1542,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           key={s.id}
                           type="button"
                           onClick={() => handleStoreSelect(s.name)}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border flex items-center gap-1.5 ${
+                          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all border flex items-center gap-2 cursor-pointer ${
                             isSelected
-                              ? 'bg-amber-400 text-slate-950 border-amber-400 shadow-sm'
-                              : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                              ? 'bg-amber-400 text-slate-950 border-amber-400 shadow-md scale-[1.02]'
+                              : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700 hover:text-white'
                           }`}
                         >
+                          <span
+                            className="w-2.5 h-2.5 rounded-full shrink-0 shadow-xs"
+                            style={{ backgroundColor: s.color }}
+                          />
                           <span>{s.name}</span>
                           {hasOfferInProduct && (
                             <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-slate-950' : 'bg-emerald-400'}`} />
@@ -1537,11 +1794,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                     <div className="pt-2 flex items-baseline gap-2">
                       <span className="text-lg font-black text-emerald-400">
-                        R$ {currentParsedPrice > 0 ? currentParsedPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}
+                        {formatCurrencyBRL(currentParsedPrice)}
                       </span>
                       {currentParsedOriginalPrice > currentParsedPrice && (
                         <span className="text-xs text-slate-500 line-through">
-                          R$ {currentParsedOriginalPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          {formatCurrencyBRL(currentParsedOriginalPrice)}
                         </span>
                       )}
                     </div>
@@ -1809,6 +2066,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             </div>
 
+            {/* CAMPO DE BUSCA RÁPIDA POR NOME */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-amber-400 absolute left-4 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={tableSearchQuery}
+                onChange={(e) => setTableSearchQuery(e.target.value)}
+                placeholder="Buscar produto por nome na vitrine publicada..."
+                className="w-full pl-11 pr-10 py-3 rounded-2xl bg-slate-900/90 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400 transition-all shadow-md"
+              />
+              {tableSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setTableSearchQuery('')}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                  title="Limpar busca"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
             {/* TOOLBAR COM 3 SELECTS (FILTRO CATEGORIA, FILTRO LOJA, ORDENAÇÃO) */}
             <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-3 shadow-lg">
               {/* Filtro por Categoria */}
@@ -1879,6 +2158,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </p>
                 <button
                   onClick={() => {
+                    setTableSearchQuery('');
                     setTableCategoryFilter('all');
                     setTableStoreFilter('all');
                     setTableSortBy('name-asc');
@@ -1912,26 +2192,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             key={prod.id} 
                             className="hover:bg-slate-800/40 transition-colors"
                           >
-                            {/* Product Info with White Container */}
+                            {/* Product Info with Large Thumbnail Container */}
                             <td className="py-4 px-6">
-                              <div className="flex items-center gap-3.5 min-w-[240px] max-w-md">
-                                <div className="w-12 h-12 rounded-xl bg-white p-1.5 flex items-center justify-center shrink-0 shadow-sm border border-slate-700">
+                              <div className="flex items-center gap-4 min-w-[280px] max-w-lg">
+                                <div className="w-20 h-20 rounded-2xl bg-white p-2 flex items-center justify-center shrink-0 shadow-md border border-slate-700/80 overflow-hidden group">
                                   <img
                                     src={prod.imageUrl}
                                     alt={prod.title}
-                                    className="max-h-full max-w-full object-contain"
+                                    className="max-h-full max-w-full object-contain transition-transform duration-200 group-hover:scale-105"
                                     onError={(e) => {
                                       (e.target as HTMLElement).style.display = 'none';
                                     }}
                                   />
                                 </div>
-                                <div className="min-w-0">
-                                  <p className="font-bold text-white truncate text-xs" title={prod.title}>
+                                <div className="min-w-0 flex-1">
+                                  <p className="font-bold text-white text-xs sm:text-sm line-clamp-2 leading-snug" title={prod.title}>
                                     {prod.title}
                                   </p>
-                                  <p className="text-[11px] text-slate-400 mt-0.5">
-                                    Melhor Loja: <span className="text-amber-400 font-semibold">{prod.bestStore || 'Mercado Livre'}</span>
-                                  </p>
+                                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                    <span className="text-[11px] text-slate-400">
+                                      Melhor Loja: <strong className="text-amber-400 font-semibold">{prod.bestStore || 'Mercado Livre'}</strong>
+                                    </span>
+                                    {prod.sku && (
+                                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800">
+                                        {prod.sku}
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             </td>
@@ -1946,7 +2233,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             {/* Best Price */}
                             <td className="py-4 px-4 whitespace-nowrap">
                               <span className="font-black text-emerald-400 text-sm">
-                                R$ {prod.minPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                {formatCurrencyBRL(prod.minPrice)}
                               </span>
                             </td>
 
@@ -2021,7 +2308,339 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         )}
 
-        {/* TAB 4: SQL SCHEMA & ENV CONFIG */}
+        {/* TAB 4: GERENCIAR CUPONS (AWIN VOUCHERS & PROMOTIONS) */}
+        {activeTab === 'coupons' && (
+          <div className="space-y-6 animate-in fade-in duration-150">
+            {/* Header & Action Controls */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 rounded-3xl bg-slate-900 border border-slate-800">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-amber-400/10 text-amber-400 border border-amber-400/20">
+                    <Ticket className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-lg font-black text-white tracking-tight">
+                    Gerenciamento de Cupons & Vouchers Awin
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-400 max-w-2xl">
+                  Sincronização de promoções e cupons da AliExpress e parceiros via API Awin com suporte a códigos manuais, validação de expiração e links de afiliados monetizados.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2.5 shrink-0">
+                <button
+                  onClick={handleSyncCoupons}
+                  disabled={isSyncingCoupons}
+                  className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs flex items-center gap-2 shadow-lg shadow-amber-400/15 disabled:opacity-50 transition-all cursor-pointer"
+                  title="Disparar busca na API da Awin agora"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isSyncingCoupons ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingCoupons ? 'Sincronizando...' : 'Sincronizar Cupons Awin'}</span>
+                </button>
+
+                <button
+                  onClick={handleOpenCreateCoupon}
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center gap-1.5 border border-slate-700 transition-all cursor-pointer"
+                >
+                  <Plus className="w-4 h-4 text-amber-400" />
+                  <span>Novo Cupom Manual</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Metrics KPI */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800/80">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total de Cupons</span>
+                <p className="text-2xl font-black text-white mt-1">{adminCoupons.length}</p>
+                <span className="text-[10px] text-slate-500">Armazenados no Supabase</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800/80">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Cupons Ativos</span>
+                <p className="text-2xl font-black text-emerald-400 mt-1">
+                  {adminCoupons.filter(c => (c.isActive !== false && c.is_active !== false) && (!c.ends_at || new Date(c.ends_at) >= new Date())).length}
+                </p>
+                <span className="text-[10px] text-emerald-500/80">Visíveis na vitrine</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800/80">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">AliExpress</span>
+                <p className="text-2xl font-black text-[#FF4747] mt-1">
+                  {adminCoupons.filter(c => (c.store_id || '').toLowerCase() === 'aliexpress' || (c.storeName || '').toLowerCase().includes('ali')).length}
+                </p>
+                <span className="text-[10px] text-slate-500">Programa Awin #18879</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800/80">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">KaBuM! / Outros</span>
+                <p className="text-2xl font-black text-sky-400 mt-1">
+                  {adminCoupons.filter(c => (c.store_id || '').toLowerCase() === 'kabum' || (c.storeName || '').toLowerCase().includes('kabum')).length}
+                </p>
+                <span className="text-[10px] text-slate-500">Parceiros integrados</span>
+              </div>
+            </div>
+
+            {/* Filter & Search Bar */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col md:flex-row items-center justify-between gap-3">
+              <div className="relative w-full md:w-80">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={couponSearchQuery}
+                  onChange={(e) => setCouponSearchQuery(e.target.value)}
+                  placeholder="Buscar por código, loja ou desconto..."
+                  className="w-full pl-10 pr-8 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors"
+                />
+                {couponSearchQuery && (
+                  <button
+                    onClick={() => setCouponSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto no-scrollbar">
+                {/* Store Filter */}
+                <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                  {[
+                    { id: 'all', label: 'Todas Lojas' },
+                    { id: 'aliexpress', label: 'AliExpress' },
+                    { id: 'kabum', label: 'KaBuM!' },
+                  ].map(store => (
+                    <button
+                      key={store.id}
+                      onClick={() => setCouponStoreFilter(store.id)}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                        couponStoreFilter === store.id
+                          ? 'bg-amber-400 text-slate-950 font-bold'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {store.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Status Filter */}
+                <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                  {[
+                    { id: 'all', label: 'Todos' },
+                    { id: 'active', label: 'Ativos' },
+                    { id: 'expired', label: 'Expirados/Pausados' },
+                  ].map(status => (
+                    <button
+                      key={status.id}
+                      onClick={() => setCouponStatusFilter(status.id as any)}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                        couponStatusFilter === status.id
+                          ? 'bg-slate-800 text-white font-bold'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {status.label}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  onClick={loadAdminCoupons}
+                  disabled={couponsLoading}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700 transition-colors"
+                  title="Recarregar tabela"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${couponsLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* Table of Coupons */}
+            {couponsLoading ? (
+              <div className="p-12 text-center rounded-3xl bg-slate-900 border border-slate-800">
+                <RefreshCw className="w-8 h-8 text-amber-400 animate-spin mx-auto mb-3" />
+                <p className="text-sm font-bold text-white">Carregando cupons cadastrados...</p>
+              </div>
+            ) : filteredCoupons.length === 0 ? (
+              <div className="p-12 text-center rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
+                <div className="w-12 h-12 rounded-2xl bg-amber-400/10 text-amber-400 flex items-center justify-center mx-auto">
+                  <Ticket className="w-6 h-6" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white">Nenhum cupom encontrado</h4>
+                  <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                    {couponSearchQuery || couponStoreFilter !== 'all' || couponStatusFilter !== 'all'
+                      ? 'Tente ajustar os filtros ou termo de busca acima.'
+                      : 'Clique no botão "Sincronizar Cupons Awin" para importar promoções ativas automaticamente ou cadastre um cupom manual.'}
+                  </p>
+                </div>
+                <button
+                  onClick={handleSyncCoupons}
+                  disabled={isSyncingCoupons}
+                  className="px-4 py-2 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 shadow-md cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCoupons ? 'animate-spin' : ''}`} />
+                  <span>Sincronizar Cupons Awin Agora</span>
+                </button>
+              </div>
+            ) : (
+              <div className="rounded-3xl bg-slate-900 border border-slate-800 overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-950/80 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-800 tracking-wider">
+                      <tr>
+                        <th className="py-3.5 px-4">Loja</th>
+                        <th className="py-3.5 px-4">Código do Cupom</th>
+                        <th className="py-3.5 px-4">Desconto & Descrição</th>
+                        <th className="py-3.5 px-4">Validade</th>
+                        <th className="py-3.5 px-4">Link Awin</th>
+                        <th className="py-3.5 px-4">Status</th>
+                        <th className="py-3.5 px-4 text-right">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {filteredCoupons.map((c) => {
+                        const isAli = (c.store_id || '').toLowerCase() === 'aliexpress' || (c.storeName || '').toLowerCase().includes('ali');
+                        const isKab = (c.store_id || '').toLowerCase() === 'kabum' || (c.storeName || '').toLowerCase().includes('kabum');
+                        const isExpired = c.ends_at && new Date(c.ends_at) < new Date();
+                        const isAct = c.isActive !== false && c.is_active !== false && !isExpired;
+
+                        return (
+                          <tr key={c.id} className="hover:bg-slate-800/40 transition-colors">
+                            {/* Loja */}
+                            <td className="py-3.5 px-4 whitespace-nowrap">
+                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold ${
+                                isAli ? 'bg-red-500/15 text-red-400 border border-red-500/30' :
+                                isKab ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30' :
+                                'bg-slate-800 text-slate-300 border border-slate-700'
+                              }`}>
+                                {c.storeName || (isAli ? 'AliExpress' : isKab ? 'KaBuM!' : 'Parceiro')}
+                              </span>
+                            </td>
+
+                            {/* Código */}
+                            <td className="py-3.5 px-4 whitespace-nowrap">
+                              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-400/10 border border-dashed border-amber-400/40 text-amber-300 font-mono font-bold text-xs">
+                                <Scissors className="w-3 h-3 text-amber-400/80" />
+                                <span>{c.code}</span>
+                                <button
+                                  onClick={() => handleCopyCouponCode(c.code)}
+                                  className="p-1 hover:text-white transition-colors"
+                                  title="Copiar código"
+                                >
+                                  {copiedCouponCode === c.code ? (
+                                    <Check className="w-3 h-3 text-emerald-400" />
+                                  ) : (
+                                    <Copy className="w-3 h-3 text-amber-400/70" />
+                                  )}
+                                </button>
+                              </div>
+                            </td>
+
+                            {/* Desconto & Descrição */}
+                            <td className="py-3.5 px-4 max-w-xs">
+                              <div className="space-y-1">
+                                {(c.discount_amount || c.discountValue) && (
+                                  <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                                    {c.discount_amount || c.discountValue}
+                                  </span>
+                                )}
+                                <p className="text-xs text-slate-200 line-clamp-2 leading-relaxed">
+                                  {c.description || 'Sem descrição informada'}
+                                </p>
+                              </div>
+                            </td>
+
+                            {/* Validade */}
+                            <td className="py-3.5 px-4 whitespace-nowrap">
+                              <div className="space-y-0.5 text-[11px]">
+                                <div className="flex items-center gap-1 text-slate-400">
+                                  <Calendar className="w-3 h-3 text-slate-500" />
+                                  <span>
+                                    {c.ends_at || c.validUntil
+                                      ? `Até ${new Date(c.ends_at || c.validUntil!).toLocaleDateString('pt-BR')}`
+                                      : 'Indeterminado'}
+                                  </span>
+                                </div>
+                                <div>
+                                  {isExpired ? (
+                                    <span className="text-[10px] font-semibold text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded">
+                                      Expirado
+                                    </span>
+                                  ) : isAct ? (
+                                    <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                                      Válido
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] font-semibold text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">
+                                      Pausado
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Link Awin */}
+                            <td className="py-3.5 px-4 whitespace-nowrap">
+                              <a
+                                href={c.awin_tracking_url || c.trackingUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors text-[11px]"
+                                title={c.awin_tracking_url || c.trackingUrl}
+                              >
+                                <span>Testar Link</span>
+                                <ExternalLink className="w-3 h-3 text-amber-400" />
+                              </a>
+                            </td>
+
+                            {/* Status Switch */}
+                            <td className="py-3.5 px-4 whitespace-nowrap">
+                              <button
+                                onClick={() => handleToggleCouponActive(c.id, c.isActive !== false && c.is_active !== false)}
+                                className={`px-2.5 py-1 rounded-full text-[10px] font-black transition-all ${
+                                  c.isActive !== false && c.is_active !== false
+                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                    : 'bg-slate-800 text-slate-500 border border-slate-700'
+                                }`}
+                              >
+                                {c.isActive !== false && c.is_active !== false ? '● Ativo' : '○ Pausado'}
+                              </button>
+                            </td>
+
+                            {/* Ações */}
+                            <td className="py-3.5 px-4 whitespace-nowrap text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => handleOpenEditCoupon(c)}
+                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                                  title="Editar cupom"
+                                >
+                                  <Pencil className="w-3.5 h-3.5 text-amber-400" />
+                                </button>
+
+                                <button
+                                  onClick={() => handleDeleteCoupon(c.id, c.code)}
+                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-transparent hover:border-rose-900 transition-colors"
+                                  title="Excluir cupom"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 5: SQL SCHEMA & ENV CONFIG */}
         {activeTab === 'sql' && (
           <div className="space-y-6 animate-in fade-in duration-150">
             <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
@@ -2048,6 +2667,169 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-emerald-400 max-h-96 overflow-y-auto whitespace-pre leading-relaxed select-all">
                 {SUPABASE_SQL_SCHEMA}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: CRIAR / EDITAR CUPOM MANUAL */}
+        {isCouponModalOpen && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
+            <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                <div className="flex items-center gap-2">
+                  <Ticket className="w-5 h-5 text-amber-400" />
+                  <h3 className="text-base font-bold text-white">
+                    {couponForm.id ? 'Editar Cupom / Voucher' : 'Cadastrar Novo Cupom'}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setIsCouponModalOpen(false)}
+                  className="p-1 text-slate-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveCoupon} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Loja */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                      Loja Parceira
+                    </label>
+                    <select
+                      value={couponForm.store_id}
+                      onChange={(e) => setCouponForm({ ...couponForm, store_id: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400"
+                    >
+                      <option value="aliexpress">AliExpress (Awin #18879)</option>
+                      <option value="kabum">KaBuM! (Awin #17729)</option>
+                      <option value="amazon">Amazon</option>
+                      <option value="mercadolivre">Mercado Livre</option>
+                      <option value="magalu">Magazine Luiza</option>
+                      <option value="shopee">Shopee</option>
+                    </select>
+                  </div>
+
+                  {/* Código */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                      Código do Cupom *
+                    </label>
+                    <input
+                      type="text"
+                      value={couponForm.code}
+                      onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })}
+                      placeholder="Ex: ALIEXPRESS15, CLAF55"
+                      required
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono font-bold text-amber-300 focus:outline-none focus:border-amber-400 uppercase"
+                    />
+                  </div>
+                </div>
+
+                {/* Desconto */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Valor do Desconto (Opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={couponForm.discount_amount}
+                    onChange={(e) => setCouponForm({ ...couponForm, discount_amount: e.target.value })}
+                    placeholder="Ex: R$ 15 OFF, US$ 55 OFF, 20% OFF"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                {/* Descrição */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Descrição / Regras do Cupom
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={couponForm.description}
+                    onChange={(e) => setCouponForm({ ...couponForm, description: e.target.value })}
+                    placeholder="Ex: R$ 15 OFF em compras acima de R$ 100 na loja oficial AliExpress"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 resize-none"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Data Início */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                      Data de Início (starts_at)
+                    </label>
+                    <input
+                      type="date"
+                      value={couponForm.starts_at}
+                      onChange={(e) => setCouponForm({ ...couponForm, starts_at: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+
+                  {/* Data Fim */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                      Data de Término / Expiração (ends_at)
+                    </label>
+                    <input
+                      type="date"
+                      value={couponForm.ends_at}
+                      onChange={(e) => setCouponForm({ ...couponForm, ends_at: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </div>
+
+                {/* Link Rastreável Awin */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Link de Afiliado Rastreável (awin_tracking_url) *
+                  </label>
+                  <input
+                    type="url"
+                    value={couponForm.awin_tracking_url}
+                    onChange={(e) => setCouponForm({ ...couponForm, awin_tracking_url: e.target.value })}
+                    placeholder="https://www.awin1.com/cread.php?awinmid=...&awinaffid=3064261..."
+                    required
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                {/* Status Toggle */}
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id="couponIsActive"
+                    checked={couponForm.is_active}
+                    onChange={(e) => setCouponForm({ ...couponForm, is_active: e.target.checked })}
+                    className="w-4 h-4 rounded text-amber-400 focus:ring-amber-400 bg-slate-950 border-slate-800"
+                  />
+                  <label htmlFor="couponIsActive" className="text-xs text-slate-300 font-semibold cursor-pointer">
+                    Cupom ativo e visível na vitrine de cupons
+                  </label>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setIsCouponModalOpen(false)}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingCoupon}
+                    className="px-5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md shadow-amber-400/20 disabled:opacity-50 transition-all cursor-pointer"
+                  >
+                    {isSavingCoupon ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    <span>{isSavingCoupon ? 'Salvando...' : 'Salvar Cupom'}</span>
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

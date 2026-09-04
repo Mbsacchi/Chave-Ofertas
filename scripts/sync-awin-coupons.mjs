@@ -72,7 +72,8 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 async function fetchAwinPromotionsApi() {
   const requestBody = JSON.stringify({
     filters: {
-      advertiserIds: [17729],
+      advertiserIds: [18879, 17729],
+      type: 'voucher',
       status: 'active',
     },
   });
@@ -174,10 +175,16 @@ function mapAwinPromotionToCoupon(item) {
   ).toString().trim();
 
   // Dados do Anunciante
-  const advertiserId = (item.advertiser?.id || item.advertiserId || '17729').toString();
-  let storeName = (item.advertiser?.name || item.advertiserName || 'KaBuM!').toString().trim();
-  if (storeName.toLowerCase().includes('kabum')) {
+  const advertiserId = (item.advertiser?.id || item.advertiserId || '18879').toString();
+  let storeName = (item.advertiser?.name || item.advertiserName || 'AliExpress').toString().trim();
+  let storeId = 'aliexpress';
+
+  if (advertiserId === '17729' || storeName.toLowerCase().includes('kabum')) {
     storeName = 'KaBuM!';
+    storeId = 'kabum';
+  } else if (advertiserId === '18879' || storeName.toLowerCase().includes('ali')) {
+    storeName = 'AliExpress';
+    storeId = 'aliexpress';
   }
 
   // Título e Descrição
@@ -186,30 +193,37 @@ function mapAwinPromotionToCoupon(item) {
   const discountValue = item.discount || item.reduction || extractDiscountValue(title, description);
 
   // Validade e Expiração
+  const startsAtIso = parseDateToIso(item.startDate || item.startsAt || item.validFrom);
   const validUntilRaw = item.endDate || item.validUntil || item.expiryDate || item.validTo;
   const validUntilIso = parseDateToIso(validUntilRaw);
 
-  // Filtro de Validade: Ignora cupons vencidos
-  if (validUntilIso) {
-    const expiryDate = new Date(validUntilIso);
-    if (expiryDate < new Date()) {
-      return null; // Cupom expirado
-    }
+  // Filtro de Validade: Ignora cupons vencidos ou que ainda não começaram
+  const now = new Date();
+  if (startsAtIso && new Date(startsAtIso) > now) {
+    return null;
+  }
+  if (validUntilIso && new Date(validUntilIso) < now) {
+    return null; // Cupom expirado
   }
 
   // ID único consistente
   const rawId = item.promotionId || item.id || item.voucherId;
-  const id = rawId ? `awin-cup-${rawId}` : `awin-cup-${advertiserId}-${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+  const id = rawId ? `awin-cup-${rawId}` : `awin-cup-${storeId}-${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
 
   return {
     id,
-    advertiser_id: advertiserId,
+    store_id: storeId,
     store_name: storeName,
     code,
     description,
-    tracking_url: trackingUrl,
-    valid_until: validUntilIso,
+    discount_amount: discountValue,
     discount_value: discountValue,
+    starts_at: startsAtIso,
+    ends_at: validUntilIso,
+    valid_until: validUntilIso,
+    awin_tracking_url: trackingUrl,
+    tracking_url: trackingUrl,
+    advertiser_id: advertiserId,
     is_active: true,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -262,13 +276,47 @@ async function runRestCouponSync() {
     console.log(`🔍 Cupons válidos com código: ${validCoupons.length} (Sem código ou expirados: ${expiredOrNoCode})`);
 
     if (validCoupons.length > 0) {
-      const { error } = await supabase
+      const { error: upsertError } = await supabase
         .from('coupons')
         .upsert(validCoupons, { onConflict: 'id', ignoreDuplicates: false });
 
-      if (error) {
-        throw new Error(`Erro ao gravar cupons no Supabase: ${error.message}`);
+      if (upsertError) {
+        console.warn(`⚠️ Tentando upsert com compatibilidade legada: ${upsertError.message}`);
+        const legacyList = validCoupons.map(c => ({
+          id: c.id,
+          advertiser_id: c.advertiser_id,
+          store_name: c.store_name,
+          code: c.code,
+          description: c.description,
+          tracking_url: c.awin_tracking_url || c.tracking_url,
+          valid_until: c.ends_at || c.valid_until,
+          discount_value: c.discount_amount || c.discount_value,
+          is_active: c.is_active,
+          created_at: c.created_at,
+          updated_at: c.updated_at,
+        }));
+
+        const { error: legacyErr } = await supabase
+          .from('coupons')
+          .upsert(legacyList, { onConflict: 'id', ignoreDuplicates: false });
+
+        if (legacyErr) {
+          throw new Error(`Erro ao gravar cupons no Supabase: ${legacyErr.message}`);
+        }
       }
+
+      // Limpeza / Inativação de cupons expirados
+      try {
+        const nowIso = new Date().toISOString();
+        await supabase
+          .from('coupons')
+          .update({ is_active: false, updated_at: nowIso })
+          .lt('ends_at', nowIso);
+        await supabase
+          .from('coupons')
+          .update({ is_active: false, updated_at: nowIso })
+          .lt('valid_until', nowIso);
+      } catch (_) {}
 
       console.log(`💾 Sucesso: ${validCoupons.length} cupons reais gravados/atualizados no Supabase!`);
     }

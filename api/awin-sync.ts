@@ -18,9 +18,48 @@ const AWIN_DATAFEED_URL =
 const BATCH_SIZE = 500;
 
 function parsePrice(val: any): number {
-  if (!val) return 0;
-  const clean = val.toString().replace(/[^\d.,]/g, '').replace(',', '.');
-  const num = parseFloat(clean);
+  if (val === null || val === undefined) return 0;
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
+  let str = val.toString().trim();
+  if (!str) return 0;
+  str = str.replace(/[^\d.,]/g, '');
+  if (!str) return 0;
+  const hasComma = str.includes(',');
+  const hasDot = str.includes('.');
+  if (hasComma && hasDot) {
+    if (str.lastIndexOf(',') > str.lastIndexOf('.')) {
+      const clean = str.replace(/\./g, '').replace(',', '.');
+      const num = parseFloat(clean);
+      return isNaN(num) ? 0 : num;
+    } else {
+      const clean = str.replace(/,/g, '');
+      const num = parseFloat(clean);
+      return isNaN(num) ? 0 : num;
+    }
+  }
+  if (hasComma) {
+    const clean = str.replace(',', '.');
+    const num = parseFloat(clean);
+    return isNaN(num) ? 0 : num;
+  }
+  if (hasDot) {
+    const dotCount = (str.match(/\./g) || []).length;
+    if (dotCount > 1) {
+      const clean = str.replace(/\./g, '');
+      const num = parseFloat(clean);
+      return isNaN(num) ? 0 : num;
+    }
+    const parts = str.split('.');
+    const decimalPart = parts[1] || '';
+    if (decimalPart.length === 3) {
+      const clean = str.replace('.', '');
+      const num = parseFloat(clean);
+      return isNaN(num) ? 0 : num;
+    }
+    const num = parseFloat(str);
+    return isNaN(num) ? 0 : num;
+  }
+  const num = parseFloat(str);
   return isNaN(num) ? 0 : num;
 }
 

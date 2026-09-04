@@ -81,26 +81,37 @@ export interface PriceHistoryRecord {
 export interface Coupon {
   id: string;
   advertiserId?: string;
+  advertiser_id?: string;
   storeName: string;
+  store_name?: string;
+  storeId?: StoreId | string;
+  store_id?: string;
   code: string;
   description: string;
+  discount_amount?: string | number;
+  starts_at?: string;
+  ends_at?: string;
+  awin_tracking_url?: string;
   trackingUrl: string;
+  tracking_url?: string;
   validUntil?: string;
+  validFrom?: string;
   title?: string;
-  storeId?: StoreId;
   storeLogo?: string;
   discountType?: 'percentage' | 'fixed' | 'shipping';
   discountValue?: number;
   minPurchase?: number;
   affiliateUrl?: string;
   categoryId?: string;
-  validFrom?: string;
   isActive?: boolean;
+  is_active?: boolean;
   isExclusive?: boolean;
   isVerified?: boolean;
   usageCount?: number;
   successRate?: number;
   verifiedAt?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 // 3-Level Hierarchical Tree

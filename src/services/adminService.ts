@@ -1,7 +1,23 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { DraftProduct, Product, StoreOffer, StoreId, PriceHistoryPoint } from '../types';
-import { MOCK_PRODUCTS } from '../data/mockData';
+import { MOCK_PRODUCTS, STORES } from '../data/mockData';
 import { groupAndConsolidateProducts } from '../lib/comparator/productGrouper';
+
+export const resolveStoreMetadata = (storeName: string): { storeId: StoreId; storeLogo: string } => {
+  const raw = storeName.toLowerCase().replace(/\s+/g, '');
+  let storeId: StoreId = 'mercadolivre';
+  if (raw.includes('amazon')) storeId = 'amazon';
+  else if (raw.includes('aliexpress') || raw.includes('ali')) storeId = 'aliexpress';
+  else if (raw.includes('shopee')) storeId = 'shopee';
+  else if (raw.includes('magalu') || raw.includes('magazine')) storeId = 'magalu';
+  else if (raw.includes('kabum')) storeId = 'kabum';
+  else if (raw.includes('awin')) storeId = 'awin';
+
+  const matchedStore = STORES.find((s) => s.id === storeId);
+  const storeLogo = matchedStore?.logo || 'https://images.unsplash.com/photo-1557821552-17105176677c?w=100&auto=format&fit=crop&q=80';
+
+  return { storeId, storeLogo };
+};
 
 // Local authenticated session cache for fallback when Supabase tables are initializing
 const LOCAL_DRAFTS_STORAGE_KEY = 'chave_ofertas_admin_drafts_v1';
@@ -412,12 +428,7 @@ export const createAndPublishManualProduct = async (
 ): Promise<Product> => {
   await requireAuthSession();
 
-  const rawStore = input.storeName.toLowerCase().replace(/\s+/g, '');
-  let storeId: StoreId = 'mercadolivre';
-  if (rawStore.includes('amazon')) storeId = 'amazon';
-  else if (rawStore.includes('shopee')) storeId = 'shopee';
-  else if (rawStore.includes('magalu') || rawStore.includes('magazine')) storeId = 'magalu';
-  else if (rawStore.includes('kabum')) storeId = 'kabum';
+  const { storeId, storeLogo } = resolveStoreMetadata(input.storeName);
 
   const discountPercent = input.originalPrice > input.price
     ? Math.round(((input.originalPrice - input.price) / input.originalPrice) * 100)
@@ -427,7 +438,7 @@ export const createAndPublishManualProduct = async (
     id: `offer-${Date.now()}-1`,
     storeId,
     storeName: input.storeName,
-    storeLogo: 'https://images.unsplash.com/photo-1557821552-17105176677c?w=100&auto=format&fit=crop&q=80',
+    storeLogo,
     price: input.price,
     originalPrice: input.originalPrice,
     discountPercent,
@@ -648,18 +659,13 @@ export const updatePublishedProduct = async (
     : 0;
 
   const currentStoreName = updates.storeName || targetProduct.bestStore || 'Mercado Livre';
-  const rawStore = currentStoreName.toLowerCase().replace(/\s+/g, '');
-  let storeId: StoreId = 'mercadolivre';
-  if (rawStore.includes('amazon')) storeId = 'amazon';
-  else if (rawStore.includes('shopee')) storeId = 'shopee';
-  else if (rawStore.includes('magalu') || rawStore.includes('magazine')) storeId = 'magalu';
-  else if (rawStore.includes('kabum')) storeId = 'kabum';
+  const { storeId, storeLogo } = resolveStoreMetadata(currentStoreName);
 
   const newOrUpdatedOffer: StoreOffer = {
     id: `offer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     storeId,
     storeName: currentStoreName,
-    storeLogo: 'https://images.unsplash.com/photo-1557821552-17105176677c?w=100&auto=format&fit=crop&q=80',
+    storeLogo,
     price: updatedPrice,
     originalPrice: updatedOriginalPrice,
     discountPercent,
@@ -860,12 +866,7 @@ export const addOfferToExistingProduct = async (
     throw new Error('Produto selecionado não encontrado na base de dados.');
   }
 
-  const rawStore = input.storeName.toLowerCase().replace(/\s+/g, '');
-  let storeId: StoreId = 'mercadolivre';
-  if (rawStore.includes('amazon')) storeId = 'amazon';
-  else if (rawStore.includes('shopee')) storeId = 'shopee';
-  else if (rawStore.includes('magalu') || rawStore.includes('magazine')) storeId = 'magalu';
-  else if (rawStore.includes('kabum')) storeId = 'kabum';
+  const { storeId, storeLogo } = resolveStoreMetadata(input.storeName);
 
   const discountPercent = input.originalPrice > input.price
     ? Math.round(((input.originalPrice - input.price) / input.originalPrice) * 100)
@@ -875,7 +876,7 @@ export const addOfferToExistingProduct = async (
     id: `offer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     storeId,
     storeName: input.storeName,
-    storeLogo: 'https://images.unsplash.com/photo-1557821552-17105176677c?w=100&auto=format&fit=crop&q=80',
+    storeLogo,
     price: input.price,
     originalPrice: input.originalPrice,
     discountPercent,
@@ -1231,5 +1232,49 @@ export const syncAliExpressOffers = async (): Promise<{ count: number; products:
     };
   }
 };
+
+/**
+ * Sincroniza cupons e vouchers da Awin (AliExpress, KaBuM! e parceiros)
+ */
+export const syncAwinCouponsOffers = async (): Promise<{ count: number; message: string; coupons: any[] }> => {
+  await requireAuthSession();
+
+  let data: any;
+
+  try {
+    const res = await fetch('/api/cron/sync-awin-coupons?manual=true', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isManual: true }),
+    });
+
+    const text = await res.text();
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Resposta do servidor: ${text.substring(0, 120)}`);
+    }
+
+    if (!res.ok || !data.success) {
+      throw new Error(data?.error || 'Erro ao sincronizar cupons com a API da Awin.');
+    }
+
+    return {
+      count: data.count || data.coupons?.length || 0,
+      message: data.message || `${data.count || 0} cupons sincronizados com sucesso!`,
+      coupons: data.coupons || [],
+    };
+  } catch (fetchErr: any) {
+    console.warn('Endpoint /api/cron/sync-awin-coupons offline, executando sincronizador direto:', fetchErr.message);
+    const { syncAwinCoupons } = await import('../lib/affiliate/awinCouponsSync');
+    const result = await syncAwinCoupons(supabase);
+    return {
+      count: result.count,
+      message: result.message,
+      coupons: result.coupons || [],
+    };
+  }
+};
+
 
 

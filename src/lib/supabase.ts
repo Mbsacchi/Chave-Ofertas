@@ -151,17 +151,36 @@ create index if not exists idx_price_history_recorded_at on public.price_history
 -- 7. Tabela de Cupons Reais (Awin & Lojas Parceiras)
 create table if not exists public.coupons (
   id text primary key,
-  advertiser_id text,
+  store_id text default 'aliexpress',
   store_name text not null,
   code text not null,
   description text default '',
-  tracking_url text not null,
-  valid_until timestamp with time zone,
+  discount_amount text default '',
   discount_value text default '',
+  starts_at timestamp with time zone,
+  ends_at timestamp with time zone,
+  valid_until timestamp with time zone,
+  awin_tracking_url text not null,
+  tracking_url text not null,
+  advertiser_id text,
   is_active boolean default true,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
+
+-- Migrações incrementais de colunas caso a tabela já exista
+alter table public.coupons add column if not exists store_id text default 'aliexpress';
+alter table public.coupons add column if not exists discount_amount text default '';
+alter table public.coupons add column if not exists starts_at timestamp with time zone;
+alter table public.coupons add column if not exists ends_at timestamp with time zone;
+alter table public.coupons add column if not exists awin_tracking_url text;
+alter table public.coupons add column if not exists discount_value text default '';
+alter table public.coupons add column if not exists valid_until timestamp with time zone;
+alter table public.coupons add column if not exists tracking_url text;
+alter table public.coupons add column if not exists advertiser_id text;
+alter table public.coupons add column if not exists is_active boolean default true;
+create index if not exists idx_coupons_store_id on public.coupons(store_id);
+create index if not exists idx_coupons_ends_at on public.coupons(ends_at);
 
 -- 8. Função para Incremento Atômico de Cliques (Popularidade)
 create or replace function public.increment_product_clicks(target_product_id text)
