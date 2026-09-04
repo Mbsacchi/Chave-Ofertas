@@ -146,10 +146,180 @@ function extractDiscountValue(title, description) {
 }
 
 /**
+ * Verifica se a promoção da Awin é válida para o Brasil ('BR') ou global/sem restrição regional
+ * Descarta promoções exclusivas de outros países (ex: Chile, México, Espanha, etc.)
+ */
+function isPromotionValidForBrazil(item) {
+  if (!item) return false;
+
+  // 1. Extração de Regiões Estruturadas (regions, membershipRegions, countries, targetCountries)
+  const rawRegions = 
+    item.regions?.countries || 
+    item.regions || 
+    item.membershipRegions || 
+    item.targetCountries ||
+    item.countries ||
+    item.campaign?.regions ||
+    item.advertiser?.regions;
+
+  if (rawRegions) {
+    let regionList = [];
+    if (Array.isArray(rawRegions)) {
+      regionList = rawRegions;
+    } else if (typeof rawRegions === 'object') {
+      regionList = Object.values(rawRegions);
+    } else if (typeof rawRegions === 'string') {
+      regionList = rawRegions.split(/[,;\s/|]+/);
+    }
+
+    if (regionList.length > 0) {
+      const hasBrazilOrGlobal = regionList.some((reg) => {
+        if (!reg) return false;
+        if (typeof reg === 'string') {
+          const code = reg.trim().toUpperCase();
+          return code === 'BR' || code === 'BRA' || code === 'BRAZIL' || code === 'BRASIL' || 
+                 code === 'GLOBAL' || code === 'ALL' || code === 'WW' || code === 'WORLDWIDE';
+        }
+        if (typeof reg === 'object') {
+          const code = (reg.countryCode || reg.code || reg.iso || reg.id || '').toString().trim().toUpperCase();
+          const name = (reg.name || reg.country || '').toString().trim().toUpperCase();
+          return code === 'BR' || code === 'BRA' || code === 'GLOBAL' || code === 'ALL' || 
+                 name.includes('BRAZIL') || name.includes('BRASIL') || name.includes('GLOBAL') || name.includes('WORLDWIDE');
+        }
+        return false;
+      });
+
+      if (!hasBrazilOrGlobal) {
+        return false;
+      }
+    }
+  }
+
+  // 2. Análise Semântica de Título / Descrição / Campanha
+  const fullText = `${item.title || ''} ${item.description || ''} ${item.campaignTitle || ''} ${item.campaign?.name || ''}`.toLowerCase();
+
+  const foreignCountryPatterns = [
+    /\bchile\b/i,
+    /\bchileno\b/i,
+    /\bcl\b(?!\s*af)/i,
+    /\bm[eé]xico\b/i,
+    /\bmx\b/i,
+    /\bespa[ñn]a\b/i,
+    /\bspain\b/i,
+    /\bes\b(?!\s*cu)/i,
+    /\bcolombia\b/i,
+    /\bargentina\b/i,
+    /\bper[uú]\b/i,
+    /\bfrance\b/i,
+    /\bitaly\b/i,
+    /\bitalia\b/i,
+    /\bgermany\b/i,
+    /\bdeutschland\b/i,
+    /\bpoland\b/i,
+    /\bpolska\b/i,
+    /\brussia\b/i,
+    /\bkorea\b/i,
+    /\bukraine\b/i
+  ];
+
+  const explicitlyMentionsBrazilOrGlobal = /\b(brasil|brazil|br|global|worldwide|todos os pa[ií]ses|todos os usu[aá]rios)\b/i.test(fullText);
+
+  if (!explicitlyMentionsBrazilOrGlobal) {
+    for (const pattern of foreignCountryPatterns) {
+      if (pattern.test(fullText)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Higieniza a descrição do cupom, removendo jargões internos da Awin e tags HTML
+ */
+function cleanPromotionDescription(rawDescription, rawTitle, code, storeName, discountAmount) {
+  let text = (rawDescription || rawTitle || '').trim();
+
+  // 1. Remove tags HTML
+  text = text.replace(/<[^>]*>/g, ' ');
+
+  // 2. Converte entidades HTML
+  text = text
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+
+  // 3. Remove termos internos da Awin, IDs e nomenclaturas de campanha
+  text = text
+    .replace(/^(voucher|promotion|campanha|campaign|cupom|promo[cç][aã]o)[\s:_-]+/i, '')
+    .replace(/\b(?:campaign|advertiser|publisher|awinmid)[_\s]?(?:id)?[_\s:_-]*\d+\b/gi, '')
+    .replace(/\b(?:awin\s*exclusive|awin\s*voucher|exclusivo\s*awin|awin)\b/gi, '')
+    .replace(/\b(?:terms\s*(?:and|&)\s*conditions|termos\s*e\s*condi[cç][oõ]es)[\s:_-]*(?:apply)?\b/gi, '')
+    .replace(/\b(?:affiliate\s*program|programa\s*de\s*afiliados)\b/gi, '')
+    .replace(/\b(?:chile|chileno|m[eé]xico|mexicano|espa[ñn]a|spain|spanish|colombia|argentina|per[uú])\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s:;._-]+/, '')
+    .replace(/[\s:;._-]+$/, '')
+    .trim();
+
+  if (!text || text.length < 8 || text.toLowerCase() === code.toLowerCase() || text.toLowerCase() === storeName.toLowerCase()) {
+    if (discountAmount && discountAmount !== 'Desconto Exclusivo') {
+      return `${discountAmount} em produtos selecionados na ${storeName}. Aplique o código ${code} no carrinho.`;
+    }
+    return `Aproveite o cupom ${code} com desconto exclusivo em compras na ${storeName}.`;
+  }
+
+  if (discountAmount && discountAmount !== 'Desconto Exclusivo' && !text.toUpperCase().includes(discountAmount.toUpperCase())) {
+    text = `${discountAmount} - ${text}`;
+  }
+
+  if (text.length > 200) {
+    text = text.substring(0, 197).trim() + '...';
+  }
+
+  return text;
+}
+
+/**
+ * Deduplica cupons garantindo código único por loja
+ */
+function deduplicateCouponsByCode(coupons) {
+  const seen = new Map();
+
+  for (const coupon of coupons) {
+    if (!coupon || !coupon.code) continue;
+    const cleanCode = coupon.code.trim().toUpperCase();
+    const store = (coupon.store_id || 'aliexpress').toLowerCase();
+    const key = `${store}:${cleanCode}`;
+
+    if (!seen.has(key)) {
+      seen.set(key, coupon);
+    } else {
+      const existing = seen.get(key);
+      const newDesc = (coupon.description || '').toLowerCase();
+      const existDesc = (existing.description || '').toLowerCase();
+      if ((newDesc.includes('brasil') || newDesc.includes('br')) && !existDesc.includes('brasil')) {
+        seen.set(key, coupon);
+      }
+    }
+  }
+
+  return Array.from(seen.values());
+}
+
+/**
  * Mapeia item do JSON da API da Awin para a tabela coupons
  */
 function mapAwinPromotionToCoupon(item) {
   if (!item) return null;
+
+  // 0. Filtro de Região: Descarta cupons que não atendem ao Brasil ou globais
+  if (!isPromotionValidForBrazil(item)) {
+    return null;
+  }
 
   // Código do cupom (a Awin pode enviar em voucher.code, code ou voucherCode)
   const code = (
@@ -161,18 +331,8 @@ function mapAwinPromotionToCoupon(item) {
   ).toString().trim().toUpperCase();
 
   if (!code) {
-    // Se a promoção não tiver código de cupom aplicável, descarta
     return null;
   }
-
-  // Link de Afiliado Rastreável Oficial da Awin (urlTracking contém a tagged URL com publisherId)
-  const trackingUrl = (
-    item.urlTracking || 
-    item.trackingUrl || 
-    item.url || 
-    item.deeplink || 
-    `https://www.awin1.com/cread.php?awinmid=${item.advertiser?.id || '17729'}&awinaffid=${AWIN_PUBLISHER_ID}&ued=${encodeURIComponent(item.url || 'https://www.kabum.com.br')}`
-  ).toString().trim();
 
   // Dados do Anunciante
   const advertiserId = (item.advertiser?.id || item.advertiserId || '18879').toString();
@@ -187,28 +347,38 @@ function mapAwinPromotionToCoupon(item) {
     storeId = 'aliexpress';
   }
 
-  // Título e Descrição
-  const title = (item.title || `Cupom ${code} na ${storeName}`).toString().trim();
-  const description = (item.description || item.title || `Aproveite o cupom ${code} em suas compras na ${storeName}.`).toString().trim();
-  const discountValue = item.discount || item.reduction || extractDiscountValue(title, description);
+  // Link de Afiliado Rastreável Oficial da Awin
+  const targetUrl = item.url || (storeId === 'kabum' ? 'https://www.kabum.com.br' : 'https://pt.aliexpress.com');
+  const trackingUrl = (
+    item.urlTracking || 
+    item.trackingUrl || 
+    item.deeplink || 
+    `https://www.awin1.com/cread.php?awinmid=${advertiserId}&awinaffid=${AWIN_PUBLISHER_ID}&clickref=coupon-${code.toLowerCase()}&ued=${encodeURIComponent(targetUrl)}`
+  ).toString().trim();
 
   // Validade e Expiração
   const startsAtIso = parseDateToIso(item.startDate || item.startsAt || item.validFrom);
   const validUntilRaw = item.endDate || item.validUntil || item.expiryDate || item.validTo;
   const validUntilIso = parseDateToIso(validUntilRaw);
 
-  // Filtro de Validade: Ignora cupons vencidos ou que ainda não começaram
+  // Filtro de Validade
   const now = new Date();
   if (startsAtIso && new Date(startsAtIso) > now) {
     return null;
   }
   if (validUntilIso && new Date(validUntilIso) < now) {
-    return null; // Cupom expirado
+    return null;
   }
 
-  // ID único consistente
-  const rawId = item.promotionId || item.id || item.voucherId;
-  const id = rawId ? `awin-cup-${rawId}` : `awin-cup-${storeId}-${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+  // Título, Descrição e Desconto Higienizados
+  const rawTitle = (item.title || '').trim();
+  const rawDesc = (item.description || item.title || '').trim();
+  const discountValue = item.discount || item.reduction || extractDiscountValue(rawTitle, rawDesc);
+  const description = cleanPromotionDescription(rawDesc, rawTitle, code, storeName, discountValue);
+
+  // ID determinístico único por loja e código (Unique Code)
+  const cleanCodeSlug = code.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const id = `awin-cup-${storeId}-${cleanCodeSlug}`;
 
   return {
     id,
@@ -273,7 +443,10 @@ async function runRestCouponSync() {
       }
     }
 
-    console.log(`🔍 Cupons válidos com código: ${validCoupons.length} (Sem código ou expirados: ${expiredOrNoCode})`);
+    // Deduplicação de Códigos (Unique Code)
+    validCoupons = deduplicateCouponsByCode(validCoupons);
+
+    console.log(`🔍 Cupons válidos e únicos para o Brasil: ${validCoupons.length} (Sem código ou excluídos: ${expiredOrNoCode})`);
 
     if (validCoupons.length > 0) {
       const { error: upsertError } = await supabase

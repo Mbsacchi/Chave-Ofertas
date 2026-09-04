@@ -142,10 +142,196 @@ export function extractDiscount(title?: string, description?: string, rawDiscoun
 }
 
 /**
+ * Verifica se a promoção da Awin é válida para o Brasil ('BR') ou global/sem restrição regional
+ * Descarta promoções exclusivas de outros países (ex: Chile, México, Espanha, etc.)
+ */
+export function isPromotionValidForBrazil(item: any): boolean {
+  if (!item) return false;
+
+  // 1. Extração de Regiões Estruturadas (regions, membershipRegions, countries, targetCountries)
+  const rawRegions = 
+    item.regions?.countries || 
+    item.regions || 
+    item.membershipRegions || 
+    item.targetCountries ||
+    item.countries ||
+    item.campaign?.regions ||
+    item.advertiser?.regions;
+
+  if (rawRegions) {
+    let regionList: any[] = [];
+    if (Array.isArray(rawRegions)) {
+      regionList = rawRegions;
+    } else if (typeof rawRegions === 'object') {
+      regionList = Object.values(rawRegions);
+    } else if (typeof rawRegions === 'string') {
+      regionList = rawRegions.split(/[,;\s/|]+/);
+    }
+
+    if (regionList.length > 0) {
+      // Verifica se 'BR', 'BRAZIL', 'BRASIL' ou 'GLOBAL' está presente
+      const hasBrazilOrGlobal = regionList.some((reg: any) => {
+        if (!reg) return false;
+        if (typeof reg === 'string') {
+          const code = reg.trim().toUpperCase();
+          return code === 'BR' || code === 'BRA' || code === 'BRAZIL' || code === 'BRASIL' || 
+                 code === 'GLOBAL' || code === 'ALL' || code === 'WW' || code === 'WORLDWIDE';
+        }
+        if (typeof reg === 'object') {
+          const code = (reg.countryCode || reg.code || reg.iso || reg.id || '').toString().trim().toUpperCase();
+          const name = (reg.name || reg.country || '').toString().trim().toUpperCase();
+          return code === 'BR' || code === 'BRA' || code === 'GLOBAL' || code === 'ALL' || 
+                 name.includes('BRAZIL') || name.includes('BRASIL') || name.includes('GLOBAL') || name.includes('WORLDWIDE');
+        }
+        return false;
+      });
+
+      // Se uma lista explícita de regiões foi retornada e NÃO inclui o Brasil nem é global, descarta
+      if (!hasBrazilOrGlobal) {
+        return false;
+      }
+    }
+  }
+
+  // 2. Análise Semântica de Título / Descrição / Campanha
+  // Evita que promoções com textos de outros países (ex: "Cupons Chile", "Exclusive Mexico") passem
+  const fullText = `${item.title || ''} ${item.description || ''} ${item.campaignTitle || ''} ${item.campaign?.name || ''}`.toLowerCase();
+
+  // Padrões de outros países
+  const foreignCountryPatterns = [
+    /\bchile\b/i,
+    /\bchileno\b/i,
+    /\bcl\b(?!\s*af)/i,
+    /\bm[eé]xico\b/i,
+    /\bmx\b/i,
+    /\bespa[ñn]a\b/i,
+    /\bspain\b/i,
+    /\bes\b(?!\s*cu)/i,
+    /\bcolombia\b/i,
+    /\bargentina\b/i,
+    /\bper[uú]\b/i,
+    /\bfrance\b/i,
+    /\bitaly\b/i,
+    /\bitalia\b/i,
+    /\bgermany\b/i,
+    /\bdeutschland\b/i,
+    /\bpoland\b/i,
+    /\bpolska\b/i,
+    /\brussia\b/i,
+    /\bkorea\b/i,
+    /\bukraine\b/i
+  ];
+
+  const explicitlyMentionsBrazilOrGlobal = /\b(brasil|brazil|br|global|worldwide|todos os pa[ií]ses|todos os usu[aá]rios)\b/i.test(fullText);
+
+  if (!explicitlyMentionsBrazilOrGlobal) {
+    for (const pattern of foreignCountryPatterns) {
+      if (pattern.test(fullText)) {
+        return false; // Descarta promoção exclusiva de outro país
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Higieniza e enriquece a descrição do cupom, removendo termos internos da Awin,
+ * referências a campanhas estrangeiras e HTML, priorizando o valor do desconto e regras claras.
+ */
+export function cleanPromotionDescription(
+  rawDescription: string, 
+  rawTitle: string, 
+  code: string, 
+  storeName: string, 
+  discountAmount?: string
+): string {
+  let text = (rawDescription || rawTitle || '').trim();
+
+  // 1. Remove tags HTML
+  text = text.replace(/<[^>]*>/g, ' ');
+
+  // 2. Converte entidades HTML
+  text = text
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+
+  // 3. Remove termos internos da Awin e nomenclaturas de campanha
+  text = text
+    .replace(/^(voucher|promotion|campanha|campaign|cupom|promo[cç][aã]o)[\s:_-]+/i, '')
+    .replace(/\b(?:campaign|advertiser|publisher|awinmid)[_\s]?(?:id)?[_\s:_-]*\d+\b/gi, '')
+    .replace(/\b(?:awin\s*exclusive|awin\s*voucher|exclusivo\s*awin|awin)\b/gi, '')
+    .replace(/\b(?:terms\s*(?:and|&)\s*conditions|termos\s*e\s*condi[cç][oõ]es)[\s:_-]*(?:apply)?\b/gi, '')
+    .replace(/\b(?:affiliate\s*program|programa\s*de\s*afiliados)\b/gi, '')
+    .replace(/\b(?:chile|chileno|m[eé]xico|mexicano|espa[ñn]a|spain|spanish|colombia|argentina|per[uú])\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s:;._-]+/, '')
+    .replace(/[\s:;._-]+$/, '')
+    .trim();
+
+  // 4. Se o texto estiver vazio, muito curto ou for apenas o código/nome da loja, gera descrição elegante
+  if (!text || text.length < 8 || text.toLowerCase() === code.toLowerCase() || text.toLowerCase() === storeName.toLowerCase()) {
+    if (discountAmount && discountAmount !== 'Desconto Exclusivo') {
+      return `${discountAmount} em produtos selecionados na ${storeName}. Aplique o código ${code} no carrinho.`;
+    }
+    return `Aproveite o cupom ${code} com desconto exclusivo em compras na ${storeName}.`;
+  }
+
+  // 5. Prioriza o valor do desconto no início se não estiver explícito
+  if (discountAmount && discountAmount !== 'Desconto Exclusivo' && !text.toUpperCase().includes(discountAmount.toUpperCase())) {
+    text = `${discountAmount} - ${text}`;
+  }
+
+  // 6. Limita tamanho para não quebrar o layout do front-end
+  if (text.length > 200) {
+    text = text.substring(0, 197).trim() + '...';
+  }
+
+  return text;
+}
+
+/**
+ * Deduplica um array de cupons garantindo que não existam códigos duplicados
+ * para a mesma loja. Mantém a ocorrência mais completa.
+ */
+export function deduplicateCouponsByCode(coupons: any[]): any[] {
+  const seen = new Map<string, any>();
+
+  for (const coupon of coupons) {
+    if (!coupon || !coupon.code) continue;
+    const cleanCode = coupon.code.trim().toUpperCase();
+    const store = (coupon.store_id || 'aliexpress').toLowerCase();
+    const key = `${store}:${cleanCode}`;
+
+    if (!seen.has(key)) {
+      seen.set(key, coupon);
+    } else {
+      // Mantém a ocorrência que menciona Brasil ou tem descrição melhor
+      const existing = seen.get(key);
+      const newDesc = (coupon.description || '').toLowerCase();
+      const existDesc = (existing.description || '').toLowerCase();
+      if ((newDesc.includes('brasil') || newDesc.includes('br')) && !existDesc.includes('brasil')) {
+        seen.set(key, coupon);
+      }
+    }
+  }
+
+  return Array.from(seen.values());
+}
+
+/**
  * Mapeia item bruto retornado pela API da Awin para o formato da tabela 'coupons'
  */
 export function mapAwinPromotionToCouponRecord(item: any, publisherId = AWIN_PUBLISHER_ID): any | null {
   if (!item) return null;
+
+  // 0. Filtro de Região: garante que apenas promoções do Brasil ('BR') ou globais sejam aceitas
+  if (!isPromotionValidForBrazil(item)) {
+    return null;
+  }
 
   // 1. Extração do código do cupom
   const code = (
@@ -207,14 +393,15 @@ export function mapAwinPromotionToCouponRecord(item: any, publisherId = AWIN_PUB
     `https://www.awin1.com/cread.php?awinmid=${advertiserId}&awinaffid=${publisherId}&clickref=coupon-${code.toLowerCase()}&ued=${encodeURIComponent(targetUrl)}`
   ).toString().trim();
 
-  // 6. Título, Descrição e Desconto
-  const title = (item.title || `Cupom ${code} na ${storeName}`).trim();
-  const description = (item.description || item.title || `Aproveite o cupom ${code} com desconto exclusivo na ${storeName}.`).trim();
-  const discountAmount = extractDiscount(title, description, item.discount || item.reduction);
+  // 6. Tratamento Elegante de Título, Descrição e Desconto
+  const rawTitle = (item.title || '').trim();
+  const rawDesc = (item.description || item.title || '').trim();
+  const discountAmount = extractDiscount(rawTitle, rawDesc, item.discount || item.reduction);
+  const description = cleanPromotionDescription(rawDesc, rawTitle, code, storeName, discountAmount);
 
-  // 7. ID único e determinístico
-  const rawId = item.promotionId || item.id || item.voucherId;
-  const id = rawId ? `awin-cup-${rawId}` : `awin-cup-${storeId}-${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+  // 7. ID único e determinístico baseado na loja e no código do cupom (evita duplicatas na chave primária)
+  const cleanCodeSlug = code.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const id = `awin-cup-${storeId}-${cleanCodeSlug}`;
 
   return {
     id,
@@ -230,6 +417,7 @@ export function mapAwinPromotionToCouponRecord(item: any, publisherId = AWIN_PUB
     awin_tracking_url: awinTrackingUrl,
     tracking_url: awinTrackingUrl, // retrocompatibilidade
     advertiser_id: advertiserId,
+    source: 'api',
     is_active: true,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -338,10 +526,10 @@ export async function syncAwinCoupons(supabaseClient?: any): Promise<CouponSyncR
   }
 
   // 2. Busca de dados na API da Awin
-  const rawItems = await fetchAwinPromotionsData();
   let validCoupons: any[] = [];
   let source: 'awin_api' | 'verified_fallback' = 'verified_fallback';
 
+  const rawItems = await fetchAwinPromotionsData();
   if (rawItems.length > 0) {
     for (const item of rawItems) {
       const mapped = mapAwinPromotionToCouponRecord(item, AWIN_PUBLISHER_ID);
@@ -349,26 +537,34 @@ export async function syncAwinCoupons(supabaseClient?: any): Promise<CouponSyncR
         validCoupons.push(mapped);
       }
     }
+    
+    // Deduplica o array processado garantindo código único por loja (Unique Code)
+    validCoupons = deduplicateCouponsByCode(validCoupons);
+
     if (validCoupons.length > 0) {
       source = 'awin_api';
-      console.log(`[AWIN COUPONS] ${validCoupons.length} cupons ativos com código válidos da API Awin.`);
+      console.log(`[AWIN COUPONS] ${validCoupons.length} cupons ativos, únicos e válidos para o Brasil obtidos da API Awin.`);
     }
   }
 
   // 3. Se a API estiver offline ou sem vouchers no momento, utiliza catálogo curado verificado
   if (validCoupons.length === 0) {
     console.log('[AWIN COUPONS] Ativando cupons oficiais verificados (AliExpress / KaBuM!) como fallback garantido.');
-    validCoupons = FALLBACK_VERIFIED_COUPONS.map(c => ({
+    validCoupons = deduplicateCouponsByCode(FALLBACK_VERIFIED_COUPONS.map(c => ({
       ...c,
+      source: 'api',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    }));
+    })));
     source = 'verified_fallback';
+  } else {
+    // Garante deduplicação final
+    validCoupons = deduplicateCouponsByCode(validCoupons);
   }
 
-  // 4. Gravação no Supabase (Upsert)
+  // 4. Gravação no Supabase (Upsert com deduplicação garantida)
   if (supabase && validCoupons.length > 0) {
-    console.log(`[AWIN COUPONS] Gravando ${validCoupons.length} cupons no Supabase...`);
+    console.log(`[AWIN COUPONS] Gravando ${validCoupons.length} cupons únicos no Supabase...`);
 
     // Tenta gravar com o schema novo completo
     const { error: fullUpsertError } = await supabase
@@ -388,6 +584,7 @@ export async function syncAwinCoupons(supabaseClient?: any): Promise<CouponSyncR
         tracking_url: c.awin_tracking_url || c.tracking_url,
         valid_until: c.ends_at || c.valid_until,
         discount_value: c.discount_amount || c.discount_value,
+        source: c.source || 'api',
         is_active: c.is_active,
         created_at: c.created_at,
         updated_at: c.updated_at,
@@ -406,7 +603,37 @@ export async function syncAwinCoupons(supabaseClient?: any): Promise<CouponSyncR
       console.log(`[AWIN COUPONS] Sucesso: ${validCoupons.length} cupons salvos com novo schema no Supabase!`);
     }
 
-    // 5. Inativação de cupons expirados
+    // 5. Limpeza de registros duplicados legados no banco (onde o mesmo código existia com IDs diferentes)
+    try {
+      const { data: allDbCoupons } = await supabase
+        .from('coupons')
+        .select('id, store_id, code, created_at')
+        .order('created_at', { ascending: false });
+
+      if (allDbCoupons && allDbCoupons.length > 0) {
+        const seenCodeMap = new Set<string>();
+        const idsToDelete: string[] = [];
+
+        for (const row of allDbCoupons) {
+          if (!row.code) continue;
+          const key = `${(row.store_id || 'aliexpress').toLowerCase()}:${row.code.trim().toUpperCase()}`;
+          if (seenCodeMap.has(key)) {
+            idsToDelete.push(row.id);
+          } else {
+            seenCodeMap.add(key);
+          }
+        }
+
+        if (idsToDelete.length > 0) {
+          console.log(`[AWIN COUPONS] Removendo ${idsToDelete.length} registros com códigos duplicados no Supabase...`);
+          await supabase.from('coupons').delete().in('id', idsToDelete);
+        }
+      }
+    } catch (dupErr: any) {
+      console.warn('[AWIN COUPONS] Aviso ao limpar duplicatas legadas:', dupErr.message);
+    }
+
+    // 6. Inativação de cupons expirados
     try {
       const nowIso = new Date().toISOString();
       await supabase
@@ -425,7 +652,7 @@ export async function syncAwinCoupons(supabaseClient?: any): Promise<CouponSyncR
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
   const msg = source === 'awin_api'
-    ? `${validCoupons.length} cupons reais sincronizados diretamente da API Awin em ${duration}s.`
+    ? `${validCoupons.length} cupons reais (Brasil/Global) sincronizados da API Awin em ${duration}s (códigos duplicados removidos).`
     : `${validCoupons.length} cupons verificados AliExpress & Parceiros sincronizados em ${duration}s.`;
 
   return {

@@ -24,7 +24,8 @@ import {
   fetchAllAdminCoupons, 
   saveAdminCoupon, 
   deleteAdminCoupon, 
-  toggleCouponActive 
+  toggleCouponActive,
+  deleteExpiredCoupons 
 } from '../services/couponService';
 import { parseCurrencyBRL, formatCurrencyBRL } from '../utils/priceFormatter';
 import { DraftProduct, Product, StoreId, Coupon } from '../types';
@@ -114,7 +115,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [couponSearchQuery, setCouponSearchQuery] = useState('');
   const [couponStoreFilter, setCouponStoreFilter] = useState('all');
   const [couponStatusFilter, setCouponStatusFilter] = useState<'all' | 'active' | 'expired'>('all');
+  const [couponSourceFilter, setCouponSourceFilter] = useState<'all' | 'api' | 'manual'>('all');
   const [copiedCouponCode, setCopiedCouponCode] = useState<string | null>(null);
+  const [isCleaningExpired, setIsCleaningExpired] = useState(false);
 
   // Coupon Modal & Form State
   const [isCouponModalOpen, setIsCouponModalOpen] = useState(false);
@@ -272,7 +275,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const todayStr = new Date().toISOString().split('T')[0];
     const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
     setCouponForm({
-      store_id: 'aliexpress',
+      store_id: 'mercadolivre',
       code: '',
       description: '',
       discount_amount: '',
@@ -285,9 +288,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const handleOpenEditCoupon = (coup: Coupon) => {
+    const defaultStore = coup.store_id || coup.storeId || 
+      (coup.storeName?.toLowerCase().includes('mercado') ? 'mercadolivre' :
+       coup.storeName?.toLowerCase().includes('amazon') ? 'amazon' :
+       coup.storeName?.toLowerCase().includes('shopee') ? 'shopee' :
+       coup.storeName?.toLowerCase().includes('ali') ? 'aliexpress' :
+       coup.storeName?.toLowerCase().includes('kabum') ? 'kabum' : 'mercadolivre');
+
     setCouponForm({
       id: coup.id,
-      store_id: coup.store_id || (coup.storeName?.toLowerCase().includes('ali') ? 'aliexpress' : 'kabum'),
+      store_id: defaultStore,
       code: coup.code,
       description: coup.description,
       discount_amount: (coup.discount_amount || coup.discountValue || '').toString(),
@@ -303,10 +313,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     e.preventDefault();
     if (!couponForm.code.trim()) {
       showFeedback('error', 'O código do cupom é obrigatório.');
-      return;
-    }
-    if (!couponForm.awin_tracking_url.trim()) {
-      showFeedback('error', 'O link de afiliado Awin é obrigatório.');
       return;
     }
 
@@ -354,6 +360,35 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const expiredCouponsCount = useMemo(() => {
+    const now = new Date();
+    return adminCoupons.filter(c => {
+      const exp = c.ends_at || c.validUntil;
+      return Boolean(exp && new Date(exp) < now);
+    }).length;
+  }, [adminCoupons]);
+
+  const handleCleanExpiredCoupons = async () => {
+    if (expiredCouponsCount === 0) {
+      showFeedback('error', 'Nenhum cupom expirado encontrado para limpar.');
+      return;
+    }
+
+    const confirmMsg = `Tem certeza que deseja excluir permanentemente ${expiredCouponsCount} cupom(ns) expirado(s) do Supabase? Essa ação manterá o banco de dados limpo e organizado.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setIsCleaningExpired(true);
+    try {
+      const { count } = await deleteExpiredCoupons();
+      showFeedback('success', `${count} cupom(ns) expirado(s) excluído(s) com sucesso.`);
+      await loadAdminCoupons();
+    } catch (err: any) {
+      showFeedback('error', `Erro ao limpar cupons expirados: ${err.message}`);
+    } finally {
+      setIsCleaningExpired(false);
+    }
+  };
+
   const filteredCoupons = useMemo(() => {
     const query = couponSearchQuery.toLowerCase().trim();
     const now = new Date();
@@ -377,6 +412,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         if (!isExp && !isInactive) return false;
       }
 
+      // Filtro de Origem (Automação API vs Manual)
+      if (couponSourceFilter !== 'all') {
+        const isManual = c.source === 'manual' || 
+                         (c.id && (c.id.startsWith('manual-') || c.id.startsWith('cup-manual-'))) || 
+                         (c.id && !c.id.startsWith('awin-'));
+        const sourceVal = isManual ? 'manual' : 'api';
+        if (sourceVal !== couponSourceFilter) return false;
+      }
+
       // Busca textual
       if (query) {
         const matchCode = (c.code || '').toLowerCase().includes(query);
@@ -388,7 +432,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
       return true;
     });
-  }, [adminCoupons, couponSearchQuery, couponStoreFilter, couponStatusFilter]);
+  }, [adminCoupons, couponSearchQuery, couponStoreFilter, couponStatusFilter, couponSourceFilter]);
 
   const showFeedback = (type: 'success' | 'error', message: string) => {
     setActionFeedback({ type, message });
@@ -2319,15 +2363,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <Ticket className="w-5 h-5" />
                   </div>
                   <h3 className="text-lg font-black text-white tracking-tight">
-                    Gerenciamento de Cupons & Vouchers Awin
+                    Gerenciamento de Cupons & Vouchers (Modo Híbrido)
                   </h3>
                 </div>
                 <p className="text-xs text-slate-400 max-w-2xl">
-                  Sincronização de promoções e cupons da AliExpress e parceiros via API Awin com suporte a códigos manuais, validação de expiração e links de afiliados monetizados.
+                  Modo híbrido de cupons: sincronização de vouchers da AliExpress/KaBuM! via API Awin e cadastro manual de cupons para Mercado Livre, Amazon, Shopee e outras lojas parceiras.
                 </p>
               </div>
 
-              <div className="flex items-center gap-2.5 shrink-0">
+              <div className="flex items-center flex-wrap gap-2.5 shrink-0">
+                <button
+                  onClick={handleCleanExpiredCoupons}
+                  disabled={isCleaningExpired || expiredCouponsCount === 0}
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-rose-950/80 text-slate-300 hover:text-rose-300 font-bold text-xs flex items-center gap-1.5 border border-slate-700 hover:border-rose-800/60 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
+                  title={expiredCouponsCount > 0 ? `Excluir permanentemente ${expiredCouponsCount} cupom(ns) expirado(s) do banco de dados` : 'Nenhum cupom expirado para limpar'}
+                >
+                  <Trash2 className={`w-3.5 h-3.5 text-rose-400 ${isCleaningExpired ? 'animate-spin' : ''}`} />
+                  <span>{isCleaningExpired ? 'Limpando...' : `Limpar Cupons Expirados${expiredCouponsCount > 0 ? ` (${expiredCouponsCount})` : ''}`}</span>
+                </button>
+
                 <button
                   onClick={handleSyncCoupons}
                   disabled={isSyncingCoupons}
@@ -2340,9 +2394,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                 <button
                   onClick={handleOpenCreateCoupon}
-                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center gap-1.5 border border-slate-700 transition-all cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 border border-purple-500/40 shadow-lg shadow-purple-600/20 transition-all cursor-pointer"
                 >
-                  <Plus className="w-4 h-4 text-amber-400" />
+                  <Plus className="w-4 h-4 text-purple-200" />
                   <span>Novo Cupom Manual</span>
                 </button>
               </div>
@@ -2357,33 +2411,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
 
               <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800/80">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-cyan-400" />
+                  <span>Automação (API)</span>
+                </span>
+                <p className="text-2xl font-black text-cyan-400 mt-1">
+                  {adminCoupons.filter(c => c.source === 'api' || (c.id && c.id.startsWith('awin-'))).length}
+                </p>
+                <span className="text-[10px] text-cyan-500/80">Awin AliExpress / KaBuM!</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800/80">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                  <Pencil className="w-3 h-3 text-purple-400" />
+                  <span>Manuais (Híbrido)</span>
+                </span>
+                <p className="text-2xl font-black text-purple-400 mt-1">
+                  {adminCoupons.filter(c => c.source === 'manual' || (c.id && !c.id.startsWith('awin-'))).length}
+                </p>
+                <span className="text-[10px] text-purple-500/80">Mercado Livre, Amazon, etc.</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800/80">
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Cupons Ativos</span>
                 <p className="text-2xl font-black text-emerald-400 mt-1">
                   {adminCoupons.filter(c => (c.isActive !== false && c.is_active !== false) && (!c.ends_at || new Date(c.ends_at) >= new Date())).length}
                 </p>
                 <span className="text-[10px] text-emerald-500/80">Visíveis na vitrine</span>
               </div>
-
-              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800/80">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">AliExpress</span>
-                <p className="text-2xl font-black text-[#FF4747] mt-1">
-                  {adminCoupons.filter(c => (c.store_id || '').toLowerCase() === 'aliexpress' || (c.storeName || '').toLowerCase().includes('ali')).length}
-                </p>
-                <span className="text-[10px] text-slate-500">Programa Awin #18879</span>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800/80">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">KaBuM! / Outros</span>
-                <p className="text-2xl font-black text-sky-400 mt-1">
-                  {adminCoupons.filter(c => (c.store_id || '').toLowerCase() === 'kabum' || (c.storeName || '').toLowerCase().includes('kabum')).length}
-                </p>
-                <span className="text-[10px] text-slate-500">Parceiros integrados</span>
-              </div>
             </div>
 
             {/* Filter & Search Bar */}
-            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col md:flex-row items-center justify-between gap-3">
-              <div className="relative w-full md:w-80">
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col xl:flex-row items-center justify-between gap-3">
+              <div className="relative w-full xl:w-72">
                 <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
@@ -2402,18 +2462,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 )}
               </div>
 
-              <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto no-scrollbar">
-                {/* Store Filter */}
+              <div className="flex items-center flex-wrap gap-2 w-full xl:w-auto">
+                {/* Origin Filter (API vs Manual) */}
                 <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
                   {[
+                    { id: 'all', label: 'Todas Origens' },
+                    { id: 'api', label: 'Automação (API)' },
+                    { id: 'manual', label: 'Manual' },
+                  ].map(orig => (
+                    <button
+                      key={orig.id}
+                      onClick={() => setCouponSourceFilter(orig.id as any)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                        couponSourceFilter === orig.id
+                          ? 'bg-purple-600 text-white font-bold'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {orig.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Store Filter */}
+                <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 overflow-x-auto no-scrollbar">
+                  {[
                     { id: 'all', label: 'Todas Lojas' },
+                    { id: 'mercadolivre', label: 'Mercado Livre' },
+                    { id: 'amazon', label: 'Amazon' },
+                    { id: 'shopee', label: 'Shopee' },
                     { id: 'aliexpress', label: 'AliExpress' },
                     { id: 'kabum', label: 'KaBuM!' },
                   ].map(store => (
                     <button
                       key={store.id}
                       onClick={() => setCouponStoreFilter(store.id)}
-                      className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                         couponStoreFilter === store.id
                           ? 'bg-amber-400 text-slate-950 font-bold'
                           : 'text-slate-400 hover:text-white'
@@ -2429,12 +2513,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   {[
                     { id: 'all', label: 'Todos' },
                     { id: 'active', label: 'Ativos' },
-                    { id: 'expired', label: 'Expirados/Pausados' },
+                    { id: 'expired', label: 'Expirados' },
                   ].map(status => (
                     <button
                       key={status.id}
                       onClick={() => setCouponStatusFilter(status.id as any)}
-                      className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
                         couponStatusFilter === status.id
                           ? 'bg-slate-800 text-white font-bold'
                           : 'text-slate-400 hover:text-white'
@@ -2470,19 +2554,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <div>
                   <h4 className="text-sm font-bold text-white">Nenhum cupom encontrado</h4>
                   <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-                    {couponSearchQuery || couponStoreFilter !== 'all' || couponStatusFilter !== 'all'
+                    {couponSearchQuery || couponStoreFilter !== 'all' || couponStatusFilter !== 'all' || couponSourceFilter !== 'all'
                       ? 'Tente ajustar os filtros ou termo de busca acima.'
-                      : 'Clique no botão "Sincronizar Cupons Awin" para importar promoções ativas automaticamente ou cadastre um cupom manual.'}
+                      : 'Clique no botão "Sincronizar Cupons Awin" para importar promoções ativas automaticamente ou clique em "Novo Cupom Manual" para cadastrar cupons do Mercado Livre, Amazon, etc.'}
                   </p>
                 </div>
-                <button
-                  onClick={handleSyncCoupons}
-                  disabled={isSyncingCoupons}
-                  className="px-4 py-2 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 shadow-md cursor-pointer"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCoupons ? 'animate-spin' : ''}`} />
-                  <span>Sincronizar Cupons Awin Agora</span>
-                </button>
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    onClick={handleSyncCoupons}
+                    disabled={isSyncingCoupons}
+                    className="px-4 py-2 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 shadow-md cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCoupons ? 'animate-spin' : ''}`} />
+                    <span>Sincronizar Cupons Awin</span>
+                  </button>
+                  <button
+                    onClick={handleOpenCreateCoupon}
+                    className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-md cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Novo Cupom Manual</span>
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="rounded-3xl bg-slate-900 border border-slate-800 overflow-hidden shadow-xl">
@@ -2492,37 +2585,66 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       <tr>
                         <th className="py-3.5 px-4">Loja</th>
                         <th className="py-3.5 px-4">Código do Cupom</th>
+                        <th className="py-3.5 px-4">Origem</th>
                         <th className="py-3.5 px-4">Desconto & Descrição</th>
                         <th className="py-3.5 px-4">Validade</th>
-                        <th className="py-3.5 px-4">Link Awin</th>
+                        <th className="py-3.5 px-4">Link da Loja</th>
                         <th className="py-3.5 px-4">Status</th>
                         <th className="py-3.5 px-4 text-right">Ações</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60">
                       {filteredCoupons.map((c) => {
+                        const now = new Date();
                         const isAli = (c.store_id || '').toLowerCase() === 'aliexpress' || (c.storeName || '').toLowerCase().includes('ali');
                         const isKab = (c.store_id || '').toLowerCase() === 'kabum' || (c.storeName || '').toLowerCase().includes('kabum');
-                        const isExpired = c.ends_at && new Date(c.ends_at) < new Date();
+                        const isMeli = (c.store_id || '').toLowerCase() === 'mercadolivre' || (c.storeName || '').toLowerCase().includes('mercado');
+                        const isAmz = (c.store_id || '').toLowerCase() === 'amazon' || (c.storeName || '').toLowerCase().includes('amazon');
+                        const isShopee = (c.store_id || '').toLowerCase() === 'shopee' || (c.storeName || '').toLowerCase().includes('shopee');
+                        const isMagalu = (c.store_id || '').toLowerCase() === 'magalu' || (c.storeName || '').toLowerCase().includes('magalu');
+                        const isExpired = Boolean(
+                          (c.ends_at && new Date(c.ends_at) < now) || 
+                          (c.validUntil && new Date(c.validUntil) < now)
+                        );
                         const isAct = c.isActive !== false && c.is_active !== false && !isExpired;
+                        const isManual = c.source === 'manual' || 
+                                         (c.id && (c.id.startsWith('manual-') || c.id.startsWith('cup-manual-'))) || 
+                                         (c.id && !c.id.startsWith('awin-'));
 
                         return (
-                          <tr key={c.id} className="hover:bg-slate-800/40 transition-colors">
+                          <tr 
+                            key={c.id} 
+                            className={`transition-colors ${
+                              isExpired 
+                                ? 'bg-rose-950/15 hover:bg-rose-950/25 text-slate-400 opacity-75 border-l-2 border-rose-500' 
+                                : 'hover:bg-slate-800/40 text-slate-300'
+                            }`}
+                          >
                             {/* Loja */}
                             <td className="py-3.5 px-4 whitespace-nowrap">
                               <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold ${
+                                isExpired ? 'opacity-60 grayscale' : ''
+                              } ${
+                                isMeli ? 'bg-amber-400/15 text-amber-300 border border-amber-400/30' :
+                                isAmz ? 'bg-orange-500/15 text-orange-300 border border-orange-500/30' :
+                                isShopee ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30' :
+                                isMagalu ? 'bg-blue-600/15 text-blue-300 border border-blue-600/30' :
                                 isAli ? 'bg-red-500/15 text-red-400 border border-red-500/30' :
                                 isKab ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30' :
                                 'bg-slate-800 text-slate-300 border border-slate-700'
                               }`}>
-                                {c.storeName || (isAli ? 'AliExpress' : isKab ? 'KaBuM!' : 'Parceiro')}
+                                {c.storeName || (isMeli ? 'Mercado Livre' : isAmz ? 'Amazon' : isShopee ? 'Shopee' : isAli ? 'AliExpress' : isKab ? 'KaBuM!' : 'Loja Parceira')}
                               </span>
                             </td>
 
                             {/* Código */}
                             <td className="py-3.5 px-4 whitespace-nowrap">
-                              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-400/10 border border-dashed border-amber-400/40 text-amber-300 font-mono font-bold text-xs">
-                                <Scissors className="w-3 h-3 text-amber-400/80" />
+                              <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl font-mono font-bold text-xs ${
+                                isExpired
+                                  ? 'bg-slate-900 border border-dashed border-rose-900/60 text-slate-400 line-through decoration-rose-500/60'
+                                  : 'bg-amber-400/10 border border-dashed border-amber-400/40 text-amber-300'
+                              }`}>
+                                <Scissors className={`w-3 h-3 ${isExpired ? 'text-slate-500' : 'text-amber-400/80'}`} />
                                 <span>{c.code}</span>
                                 <button
                                   onClick={() => handleCopyCouponCode(c.code)}
@@ -2532,21 +2654,44 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                   {copiedCouponCode === c.code ? (
                                     <Check className="w-3 h-3 text-emerald-400" />
                                   ) : (
-                                    <Copy className="w-3 h-3 text-amber-400/70" />
+                                    <Copy className={`w-3 h-3 ${isExpired ? 'text-slate-500' : 'text-amber-400/70'}`} />
                                   )}
                                 </button>
                               </div>
+                            </td>
+
+                            {/* Origem (Tag visual: Automação API vs Adicionado Manualmente) */}
+                            <td className="py-3.5 px-4 whitespace-nowrap">
+                              {isManual ? (
+                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 shadow-sm ${
+                                  isExpired ? 'opacity-60' : ''
+                                }`}>
+                                  <Pencil className="w-3 h-3 text-purple-400" />
+                                  <span>Adicionado Manualmente</span>
+                                </span>
+                              ) : (
+                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 shadow-sm ${
+                                  isExpired ? 'opacity-60' : ''
+                                }`}>
+                                  <Sparkles className="w-3 h-3 text-cyan-400" />
+                                  <span>Automação (API)</span>
+                                </span>
+                              )}
                             </td>
 
                             {/* Desconto & Descrição */}
                             <td className="py-3.5 px-4 max-w-xs">
                               <div className="space-y-1">
                                 {(c.discount_amount || c.discountValue) && (
-                                  <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                                  <span className={`inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold ${
+                                    isExpired 
+                                      ? 'bg-slate-800 text-slate-400 border border-slate-700' 
+                                      : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                  }`}>
                                     {c.discount_amount || c.discountValue}
                                   </span>
                                 )}
-                                <p className="text-xs text-slate-200 line-clamp-2 leading-relaxed">
+                                <p className={`text-xs line-clamp-2 leading-relaxed ${isExpired ? 'text-slate-400 line-through decoration-slate-600' : 'text-slate-200'}`}>
                                   {c.description || 'Sem descrição informada'}
                                 </p>
                               </div>
@@ -2554,10 +2699,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                             {/* Validade */}
                             <td className="py-3.5 px-4 whitespace-nowrap">
-                              <div className="space-y-0.5 text-[11px]">
-                                <div className="flex items-center gap-1 text-slate-400">
-                                  <Calendar className="w-3 h-3 text-slate-500" />
-                                  <span>
+                              <div className="space-y-1 text-[11px]">
+                                <div className={`flex items-center gap-1 ${isExpired ? 'text-slate-400' : 'text-slate-400'}`}>
+                                  <Calendar className={`w-3 h-3 ${isExpired ? 'text-rose-400' : 'text-slate-500'}`} />
+                                  <span className={isExpired ? 'line-through decoration-rose-500/50' : ''}>
                                     {c.ends_at || c.validUntil
                                       ? `Até ${new Date(c.ends_at || c.validUntil!).toLocaleDateString('pt-BR')}`
                                       : 'Indeterminado'}
@@ -2565,8 +2710,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                 </div>
                                 <div>
                                   {isExpired ? (
-                                    <span className="text-[10px] font-semibold text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded">
-                                      Expirado
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-rose-300 bg-rose-500/25 border border-rose-500/50 px-2 py-0.5 rounded shadow-sm">
+                                      <AlertTriangle className="w-2.5 h-2.5 text-rose-400" />
+                                      <span>Expirado</span>
                                     </span>
                                   ) : isAct ? (
                                     <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
@@ -2581,13 +2727,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               </div>
                             </td>
 
-                            {/* Link Awin */}
+                            {/* Link Awin / Loja */}
                             <td className="py-3.5 px-4 whitespace-nowrap">
                               <a
                                 href={c.awin_tracking_url || c.trackingUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors text-[11px]"
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors text-[11px] ${
+                                  isExpired ? 'opacity-60' : ''
+                                }`}
                                 title={c.awin_tracking_url || c.trackingUrl}
                               >
                                 <span>Testar Link</span>
@@ -2595,18 +2743,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               </a>
                             </td>
 
-                            {/* Status Switch */}
+                            {/* Status Switch / Badge Expirado */}
                             <td className="py-3.5 px-4 whitespace-nowrap">
-                              <button
-                                onClick={() => handleToggleCouponActive(c.id, c.isActive !== false && c.is_active !== false)}
-                                className={`px-2.5 py-1 rounded-full text-[10px] font-black transition-all ${
-                                  c.isActive !== false && c.is_active !== false
-                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                                    : 'bg-slate-800 text-slate-500 border border-slate-700'
-                                }`}
-                              >
-                                {c.isActive !== false && c.is_active !== false ? '● Ativo' : '○ Pausado'}
-                              </button>
+                              {isExpired ? (
+                                <span 
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-sm"
+                                  title="Cupom expirado pela data de validade (invisível na vitrine)"
+                                >
+                                  <AlertTriangle className="w-3 h-3 text-rose-400" />
+                                  <span>Expirado</span>
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() => handleToggleCouponActive(c.id, c.isActive !== false && c.is_active !== false)}
+                                  className={`px-2.5 py-1 rounded-full text-[10px] font-black transition-all ${
+                                    c.isActive !== false && c.is_active !== false
+                                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                      : 'bg-slate-800 text-slate-500 border border-slate-700'
+                                  }`}
+                                >
+                                  {c.isActive !== false && c.is_active !== false ? '● Ativo' : '○ Pausado'}
+                                </button>
+                              )}
                             </td>
 
                             {/* Ações */}
@@ -2671,16 +2829,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         )}
 
-        {/* MODAL: CRIAR / EDITAR CUPOM MANUAL */}
+        {/* MODAL: CRIAR / EDITAR CUPOM MANUAL (MODO HÍBRIDO) */}
         {isCouponModalOpen && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
             <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-5">
               <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-                <div className="flex items-center gap-2">
-                  <Ticket className="w-5 h-5 text-amber-400" />
-                  <h3 className="text-base font-bold text-white">
-                    {couponForm.id ? 'Editar Cupom / Voucher' : 'Cadastrar Novo Cupom'}
-                  </h3>
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                    <Ticket className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white">
+                      {couponForm.id ? 'Editar Cupom' : 'Novo Cupom Manual (Modo Híbrido)'}
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      Cadastre cupons para lojas sem API aberta (Mercado Livre, Amazon, etc.)
+                    </p>
+                  </div>
                 </div>
                 <button
                   onClick={() => setIsCouponModalOpen(false)}
@@ -2695,19 +2860,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   {/* Loja */}
                   <div>
                     <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                      Loja Parceira
+                      Seletor de Loja *
                     </label>
                     <select
                       value={couponForm.store_id}
                       onChange={(e) => setCouponForm({ ...couponForm, store_id: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-purple-400"
                     >
-                      <option value="aliexpress">AliExpress (Awin #18879)</option>
-                      <option value="kabum">KaBuM! (Awin #17729)</option>
-                      <option value="amazon">Amazon</option>
-                      <option value="mercadolivre">Mercado Livre</option>
-                      <option value="magalu">Magazine Luiza</option>
-                      <option value="shopee">Shopee</option>
+                      <option value="mercadolivre">Mercado Livre (Modo Manual)</option>
+                      <option value="amazon">Amazon (Modo Manual)</option>
+                      <option value="shopee">Shopee (Modo Manual)</option>
+                      <option value="magalu">Magazine Luiza (Modo Manual)</option>
+                      <option value="aliexpress">AliExpress</option>
+                      <option value="kabum">KaBuM!</option>
                     </select>
                   </div>
 
@@ -2720,9 +2885,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       type="text"
                       value={couponForm.code}
                       onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })}
-                      placeholder="Ex: ALIEXPRESS15, CLAF55"
+                      placeholder="Ex: MELI15, AMAZON20, TECH10"
                       required
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono font-bold text-amber-300 focus:outline-none focus:border-amber-400 uppercase"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono font-bold text-amber-300 focus:outline-none focus:border-purple-400 uppercase"
                     />
                   </div>
                 </div>
@@ -2730,28 +2895,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 {/* Desconto */}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    Valor do Desconto (Opcional)
+                    Valor / Desconto (ex: 15% OFF, R$ 20 OFF)
                   </label>
                   <input
                     type="text"
                     value={couponForm.discount_amount}
                     onChange={(e) => setCouponForm({ ...couponForm, discount_amount: e.target.value })}
-                    placeholder="Ex: R$ 15 OFF, US$ 55 OFF, 20% OFF"
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400"
+                    placeholder="Ex: 15% OFF, R$ 20 OFF, Frete Grátis"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-purple-400"
                   />
                 </div>
 
                 {/* Descrição */}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    Descrição / Regras do Cupom
+                    Descrição do Cupom
                   </label>
                   <textarea
                     rows={2}
                     value={couponForm.description}
                     onChange={(e) => setCouponForm({ ...couponForm, description: e.target.value })}
-                    placeholder="Ex: R$ 15 OFF em compras acima de R$ 100 na loja oficial AliExpress"
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400 resize-none"
+                    placeholder="Ex: 15% OFF em Eletrônicos no Mercado Livre em compras acima de R$ 100"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-purple-400 resize-none"
                   />
                 </div>
 
@@ -2765,37 +2930,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       type="date"
                       value={couponForm.starts_at}
                       onChange={(e) => setCouponForm({ ...couponForm, starts_at: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-purple-400"
                     />
                   </div>
 
                   {/* Data Fim */}
                   <div>
                     <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                      Data de Término / Expiração (ends_at)
+                      Data de Término / Validade (ends_at)
                     </label>
                     <input
                       type="date"
                       value={couponForm.ends_at}
                       onChange={(e) => setCouponForm({ ...couponForm, ends_at: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-purple-400"
                     />
                   </div>
                 </div>
 
-                {/* Link Rastreável Awin */}
+                {/* Link de Afiliado ou Destino */}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    Link de Afiliado Rastreável (awin_tracking_url) *
+                    Link de Afiliado / Destino da Loja (Opcional)
                   </label>
                   <input
                     type="url"
                     value={couponForm.awin_tracking_url}
                     onChange={(e) => setCouponForm({ ...couponForm, awin_tracking_url: e.target.value })}
-                    placeholder="https://www.awin1.com/cread.php?awinmid=...&awinaffid=3064261..."
-                    required
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-400"
+                    placeholder="Ex: https://www.mercadolivre.com.br ou link com tag de afiliado"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-purple-400"
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Se deixado em branco, o sistema direcionará automaticamente para a página principal da loja.
+                  </p>
                 </div>
 
                 {/* Status Toggle */}
@@ -2805,7 +2972,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     id="couponIsActive"
                     checked={couponForm.is_active}
                     onChange={(e) => setCouponForm({ ...couponForm, is_active: e.target.checked })}
-                    className="w-4 h-4 rounded text-amber-400 focus:ring-amber-400 bg-slate-950 border-slate-800"
+                    className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-slate-950 border-slate-800"
                   />
                   <label htmlFor="couponIsActive" className="text-xs text-slate-300 font-semibold cursor-pointer">
                     Cupom ativo e visível na vitrine de cupons
@@ -2823,7 +2990,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <button
                     type="submit"
                     disabled={isSavingCoupon}
-                    className="px-5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md shadow-amber-400/20 disabled:opacity-50 transition-all cursor-pointer"
+                    className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-xs flex items-center gap-1.5 shadow-md shadow-purple-600/20 disabled:opacity-50 transition-all cursor-pointer"
                   >
                     {isSavingCoupon ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
                     <span>{isSavingCoupon ? 'Salvando...' : 'Salvar Cupom'}</span>

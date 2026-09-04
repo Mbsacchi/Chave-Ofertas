@@ -110,6 +110,7 @@ export interface Coupon {
   usageCount?: number;
   successRate?: number;
   verifiedAt?: string;
+  source?: 'api' | 'manual' | string;
   created_at?: string;
   updated_at?: string;
 }

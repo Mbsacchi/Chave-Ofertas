@@ -16,6 +16,7 @@ create table if not exists public.coupons (
   awin_tracking_url text not null,
   tracking_url text not null,
   advertiser_id text,
+  source text default 'api',
   is_active boolean default true,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
@@ -27,6 +28,7 @@ alter table public.coupons add column if not exists discount_amount text default
 alter table public.coupons add column if not exists starts_at timestamp with time zone;
 alter table public.coupons add column if not exists ends_at timestamp with time zone;
 alter table public.coupons add column if not exists awin_tracking_url text;
+alter table public.coupons add column if not exists source text default 'api';
 alter table public.coupons add column if not exists discount_value text default '';
 alter table public.coupons add column if not exists valid_until timestamp with time zone;
 alter table public.coupons add column if not exists tracking_url text;
@@ -42,11 +44,13 @@ update public.coupons set
   end),
   awin_tracking_url = coalesce(awin_tracking_url, tracking_url),
   ends_at = coalesce(ends_at, valid_until),
-  discount_amount = coalesce(discount_amount, discount_value)
-where store_id is null or awin_tracking_url is null or ends_at is null;
+  discount_amount = coalesce(discount_amount, discount_value),
+  source = coalesce(source, case when id like 'manual-%' then 'manual' else 'api' end)
+where store_id is null or awin_tracking_url is null or ends_at is null or source is null;
 
 -- 4. Índices para performance de busca e expiração
 create index if not exists idx_coupons_store_id on public.coupons(store_id);
+create index if not exists idx_coupons_source on public.coupons(source);
 create index if not exists idx_coupons_is_active on public.coupons(is_active);
 create index if not exists idx_coupons_ends_at on public.coupons(ends_at);
 create index if not exists idx_coupons_code on public.coupons(code);

@@ -335,9 +335,23 @@ export const AppContent: React.FC = () => {
     }
   };
 
-  // Filtered real coupons (Direto do Supabase)
+  // Filtered real coupons (Direto do Supabase - Cupons expirados nunca são exibidos)
   const filteredCoupons = useMemo(() => {
+    const now = new Date();
     return realCoupons.filter((coupon) => {
+      // Invalida cupons inativos ou vencidos
+      if (coupon.isActive === false || coupon.is_active === false) return false;
+      const expiry = coupon.ends_at || coupon.validUntil;
+      if (expiry) {
+        const expDate = new Date(expiry);
+        if (!isNaN(expDate.getTime()) && expDate < now) return false;
+      }
+      const start = coupon.starts_at || coupon.validFrom;
+      if (start) {
+        const startDate = new Date(start);
+        if (!isNaN(startDate.getTime()) && startDate > now) return false;
+      }
+
       if (selectedStores.length > 0 && coupon.storeId && !selectedStores.includes(coupon.storeId as StoreId)) return false;
       if (selectedCategory !== 'all' && coupon.categoryId && coupon.categoryId !== selectedCategory) return false;
       return true;
