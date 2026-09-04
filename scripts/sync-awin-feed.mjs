@@ -58,10 +58,74 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
   },
 });
 
-function parsePrice(val) {
-  if (!val) return 0;
-  const clean = val.toString().replace(/[^\d.,]/g, '').replace(',', '.');
-  const num = parseFloat(clean);
+function parsePrice(val, referencePrice) {
+  if (val === null || val === undefined) return 0;
+  if (typeof val === 'number') {
+    if (isNaN(val)) return 0;
+    const str = val.toString();
+    const parts = str.split('.');
+    if (parts.length === 2 && parts[1].length === 3 && val < 100) {
+      return Math.round(val * 1000);
+    }
+    if (referencePrice && referencePrice > 100 && val < 50) {
+      const scaled = Math.round(val * 1000);
+      if (Math.abs(scaled - referencePrice) / referencePrice < 0.5) {
+        return scaled;
+      }
+    }
+    return val;
+  }
+
+  let str = val.toString().trim().replace(/[^\d.,]/g, '');
+  if (!str) return 0;
+
+  const hasComma = str.includes(',');
+  const hasDot = str.includes('.');
+
+  if (hasComma && hasDot) {
+    if (str.lastIndexOf(',') > str.lastIndexOf('.')) {
+      // Formato brasileiro: 2.789,00
+      const clean = str.replace(/\./g, '').replace(',', '.');
+      const num = parseFloat(clean);
+      return isNaN(num) ? 0 : num;
+    } else {
+      // Formato americano: 2,789.00
+      const clean = str.replace(/,/g, '');
+      const num = parseFloat(clean);
+      return isNaN(num) ? 0 : num;
+    }
+  }
+
+  if (hasComma) {
+    const parts = str.split(',');
+    if (parts.length === 2 && parts[1].length === 3 && parseInt(parts[0], 10) < 100) {
+      return parseInt(parts[0] + parts[1], 10);
+    }
+    const clean = str.replace(',', '.');
+    const num = parseFloat(clean);
+    return isNaN(num) ? 0 : num;
+  }
+
+  if (hasDot) {
+    const dotCount = (str.match(/\./g) || []).length;
+    if (dotCount > 1) {
+      const clean = str.replace(/\./g, '');
+      const num = parseFloat(clean);
+      return isNaN(num) ? 0 : num;
+    }
+    const parts = str.split('.');
+    const decimalPart = parts[1] || '';
+    if (decimalPart.length === 3 && parseFloat(parts[0]) < 100) {
+      // Ponto de milhar: "2.789" -> 2789
+      const clean = str.replace('.', '');
+      const num = parseFloat(clean);
+      return isNaN(num) ? 0 : num;
+    }
+    const num = parseFloat(str);
+    return isNaN(num) ? 0 : num;
+  }
+
+  const num = parseFloat(str);
   return isNaN(num) ? 0 : num;
 }
 

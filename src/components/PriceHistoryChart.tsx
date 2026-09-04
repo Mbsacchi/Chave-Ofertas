@@ -12,6 +12,7 @@ import { TrendingDown, TrendingUp, Minus, Flame, Calendar, DollarSign } from 'lu
 import { Product, PriceHistoryPoint } from '../types';
 import { fetchProductPriceHistory } from '../services/productAnalyticsService';
 import { normalizeProduct } from '../services/productService';
+import { normalizePrice, formatCurrencyBRL, formatWholeCurrencyBRL } from '../utils/priceFormatter';
 
 interface PriceHistoryChartProps {
   product: Product;
@@ -27,34 +28,40 @@ export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({ product: r
     let isMounted = true;
     const loadHistory = async () => {
       try {
-        const data = await fetchProductPriceHistory(product.id, product.priceHistory || []);
+        const data = await fetchProductPriceHistory(product.id, product.priceHistory || [], product.minPrice);
         if (isMounted) {
           if (data && data.length > 0) {
-            setHistoryData(data);
+            const sanitizedPoints: PriceHistoryPoint[] = data.map((p) => ({
+              ...p,
+              minPrice: normalizePrice(p.minPrice, product.minPrice),
+            }));
+            setHistoryData(sanitizedPoints);
           } else {
             // Gera pontos contextuais baseados no min/max e menor histórico se ainda não houver dados gravados
+            const refMin = product.minPrice > 0 ? product.minPrice : 100;
+            const refMax = product.maxPrice > refMin ? product.maxPrice : Math.round(refMin * 1.15);
             const now = Date.now();
             const dayMs = 24 * 60 * 60 * 1000;
             const points: PriceHistoryPoint[] = [
               {
                 date: '30d atrás',
                 timestamp: now - 30 * dayMs,
-                minPrice: Math.round(product.maxPrice * 0.98),
+                minPrice: Math.round(refMax * 0.98),
               },
               {
                 date: '15d atrás',
                 timestamp: now - 15 * dayMs,
-                minPrice: Math.round((product.minPrice + product.maxPrice) / 2),
+                minPrice: Math.round((refMin + refMax) / 2),
               },
               {
                 date: '7d atrás',
                 timestamp: now - 7 * dayMs,
-                minPrice: Math.round(product.minPrice * 1.03),
+                minPrice: Math.round(refMin * 1.03),
               },
               {
                 date: 'Hoje',
                 timestamp: now,
-                minPrice: product.minPrice,
+                minPrice: refMin,
               },
             ];
             setHistoryData(points);
@@ -74,15 +81,19 @@ export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({ product: r
   // Filtro de período selecionado
   const filteredData = useMemo(() => {
     if (!historyData || historyData.length === 0) return [];
-    if (selectedRange === 'all') return historyData;
+    const sanitized = historyData.map((d) => ({
+      ...d,
+      minPrice: normalizePrice(d.minPrice, product.minPrice),
+    }));
+    if (selectedRange === 'all') return sanitized;
 
     const now = Date.now();
     const dayLimit = selectedRange === '30d' ? 30 : 90;
     const cutoff = now - dayLimit * 24 * 60 * 60 * 1000;
 
-    const subset = historyData.filter((p) => p.timestamp >= cutoff);
-    return subset.length >= 2 ? subset : historyData;
-  }, [historyData, selectedRange]);
+    const subset = sanitized.filter((p) => p.timestamp >= cutoff);
+    return subset.length >= 2 ? subset : sanitized;
+  }, [historyData, selectedRange, product.minPrice]);
 
   // Cálculos estatísticos de tendência
   const {
@@ -102,7 +113,7 @@ export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({ product: r
       };
     }
 
-    const prices = filteredData.map((d) => d.minPrice);
+    const prices = filteredData.map((d) => normalizePrice(d.minPrice, product.minPrice));
     const curr = prices[prices.length - 1];
     const first = prices[0];
     const minP = Math.min(...prices);
@@ -137,7 +148,7 @@ export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({ product: r
             <span>{dataPoint.date}</span>
           </div>
           <div className="text-base font-black text-emerald-400 flex items-center gap-1">
-            <span>R$ {Number(payload[0].value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+            <span>{formatCurrencyBRL(payload[0].value)}</span>
           </div>
           {dataPoint.minPrice === minPriceInPeriod && (
             <span className="inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
@@ -229,19 +240,19 @@ export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({ product: r
         <div className="bg-white dark:bg-dark-card p-3 rounded-2xl border border-gray-200/80 dark:border-dark-border">
           <span className="text-[10px] font-bold text-gray-400 block uppercase">Atual</span>
           <span className="text-sm sm:text-base font-black text-emerald-600 dark:text-emerald-400">
-            R$ {currentPrice.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+            {formatWholeCurrencyBRL(currentPrice)}
           </span>
         </div>
         <div className="bg-white dark:bg-dark-card p-3 rounded-2xl border border-gray-200/80 dark:border-dark-border">
           <span className="text-[10px] font-bold text-gray-400 block uppercase">Mínima do Período</span>
           <span className="text-sm sm:text-base font-black text-emerald-600 dark:text-emerald-400">
-            R$ {minPriceInPeriod.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+            {formatWholeCurrencyBRL(minPriceInPeriod)}
           </span>
         </div>
         <div className="bg-white dark:bg-dark-card p-3 rounded-2xl border border-gray-200/80 dark:border-dark-border">
           <span className="text-[10px] font-bold text-gray-400 block uppercase">Máxima do Período</span>
           <span className="text-sm sm:text-base font-black text-gray-700 dark:text-gray-300">
-            R$ {maxPriceInPeriod.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+            {formatWholeCurrencyBRL(maxPriceInPeriod)}
           </span>
         </div>
       </div>
@@ -272,7 +283,7 @@ export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({ product: r
               fontWeight={700}
               tickLine={false}
               axisLine={false}
-              tickFormatter={(v) => `R$${v}`}
+              tickFormatter={(v) => 'R$ ' + Math.round(Number(v) || 0).toLocaleString('pt-BR')}
             />
             <Tooltip content={<CustomTooltip />} />
             <Area

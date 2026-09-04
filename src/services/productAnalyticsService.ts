@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { PriceHistoryPoint } from '../types';
+import { normalizePrice } from '../utils/priceFormatter';
 
 /**
  * Registra e incrementa atomicamente o contador de cliques/popularidade de um produto.
@@ -56,7 +57,8 @@ export async function incrementProductClick(productId: string): Promise<void> {
  */
 export async function fetchProductPriceHistory(
   productId: string,
-  fallbackHistory: PriceHistoryPoint[] = []
+  fallbackHistory: PriceHistoryPoint[] = [],
+  referencePrice?: number
 ): Promise<PriceHistoryPoint[]> {
   if (!productId || !isSupabaseConfigured) {
     return fallbackHistory;
@@ -77,7 +79,7 @@ export async function fetchProductPriceHistory(
         return {
           date: `${day}/${month}`,
           timestamp: dateObj.getTime(),
-          minPrice: Number(row.price),
+          minPrice: normalizePrice(row.price, referencePrice),
         };
       });
     }

@@ -23,7 +23,17 @@
 export function parseCurrencyBRL(val: any): number {
   if (val === null || val === undefined) return 0;
   if (typeof val === 'number') {
-    return isNaN(val) ? 0 : val;
+    if (isNaN(val) || val <= 0) return 0;
+
+    // Autocorreção para floats com 3 casas decimais resultantes de parse incorreto de milhares (ex: 2.789 -> 2789)
+    // No e-commerce brasileiro, valores com 3 casas decimais e menores que 100 representam milhares de reais
+    const strNum = val.toString();
+    const parts = strNum.split('.');
+    if (parts.length === 2 && parts[1].length === 3 && val < 100) {
+      return Math.round(val * 1000);
+    }
+
+    return val;
   }
 
   let str = val.toString().trim();
@@ -42,13 +52,13 @@ export function parseCurrencyBRL(val: any): number {
     const lastDotIndex = str.lastIndexOf('.');
 
     if (lastCommaIndex > lastDotIndex) {
-      // Padrão Brasileiro: "3.000,00" ou "1.250.000,50"
+      // Padrão Brasileiro: "3.000,00" ou "2.789,00"
       // Pontos são milhares, vírgula é decimal
       const clean = str.replace(/\./g, '').replace(',', '.');
       const num = parseFloat(clean);
       return isNaN(num) ? 0 : num;
     } else {
-      // Padrão Internacional: "3,000.00" ou "1,250,000.50"
+      // Padrão Internacional: "3,000.00" ou "2,789.00"
       // Vírgulas são milhares, ponto é decimal
       const clean = str.replace(/,/g, '');
       const num = parseFloat(clean);
@@ -56,8 +66,16 @@ export function parseCurrencyBRL(val: any): number {
     }
   }
 
-  // Caso 2: Possui apenas vírgula (ex: "3000,00", "199,90", "3,50")
+  // Caso 2: Possui apenas vírgula (ex: "3000,00", "199,90", "2,789")
   if (hasComma) {
+    const parts = str.split(',');
+    // Se possui exatamente 3 dígitos após a vírgula e parte inteira < 100, trata-se de milhar: "2,789" -> 2789
+    if (parts[1] && parts[1].length === 3 && parseFloat(parts[0]) < 100) {
+      const clean = str.replace(/,/g, '');
+      const num = parseFloat(clean);
+      return isNaN(num) ? 0 : num;
+    }
+
     const clean = str.replace(',', '.');
     const num = parseFloat(clean);
     return isNaN(num) ? 0 : num;
@@ -73,11 +91,10 @@ export function parseCurrencyBRL(val: any): number {
       return isNaN(num) ? 0 : num;
     }
 
-    // Apenas 1 ponto: verificar se é milhar (3 dígitos após o ponto)
+    // Apenas 1 ponto: verificar se é milhar (3 dígitos após o ponto: "2.789", "3.000")
     const parts = str.split('.');
     const decimalPart = parts[1] || '';
 
-    // No contexto de e-commerce brasileiro, "3.000", "1.200", "25.000" representam milhares
     if (decimalPart.length === 3) {
       const clean = str.replace('.', '');
       const num = parseFloat(clean);
@@ -95,19 +112,60 @@ export function parseCurrencyBRL(val: any): number {
 }
 
 /**
+ * Normaliza qualquer valor de preço numérico ou textual para reais (BRL).
+ * Corrige automaticamente casos onde 2.789 vira R$ 3, centavos inteiros ou strings mal formatadas.
+ */
+export function normalizePrice(val: any, referencePrice?: number): number {
+  if (val === null || val === undefined) return 0;
+
+  let num = typeof val === 'number' ? val : parseCurrencyBRL(val);
+  if (isNaN(num) || num <= 0) return 0;
+
+  // 1. Caso de float corrompido com 3 casas decimais (ex: 2.789 vindo de "2.789" mal parseado)
+  const str = num.toString();
+  const parts = str.split('.');
+  if (parts.length === 2 && parts[1].length === 3 && num < 100) {
+    num = Math.round(num * 1000);
+  }
+
+  // 2. Análise contextual com preço de referência
+  if (referencePrice && referencePrice > 0) {
+    // Se o valor está na escala de milésimos (ex: num = 2.79 e ref = 2789)
+    if (referencePrice >= 100 && num < 50 && Math.abs((num * 1000) - referencePrice) / referencePrice < 0.5) {
+      num = Math.round(num * 1000 * 100) / 100;
+    }
+    // Se o valor está na escala de centavos (ex: num = 278900 e ref = 2789)
+    else if (num > 1000 && referencePrice < 10000 && Math.abs((num / 100) - referencePrice) / referencePrice < 0.5) {
+      num = Math.round((num / 100) * 100) / 100;
+    }
+  }
+
+  return Math.round(num * 100) / 100;
+}
+
+/**
  * Formata um número ou string para moeda em Reais com prefixo R$
- * Exemplo: 3000 -> "R$ 3.000,00"
+ * Exemplo: 2789 -> "R$ 2.789,00"
  */
 export function formatCurrencyBRL(val: number | string | null | undefined): string {
-  const num = typeof val === 'number' ? val : parseCurrencyBRL(val);
+  const num = normalizePrice(val);
   return `R$ ${num.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 /**
+ * Formata valor inteiro em Reais (sem centavos), ideal para cards e destaques
+ * Exemplo: 2789 -> "R$ 2.789"
+ */
+export function formatWholeCurrencyBRL(val: number | string | null | undefined): string {
+  const num = normalizePrice(val);
+  return `R$ ${Math.round(num).toLocaleString('pt-BR')}`;
+}
+
+/**
  * Formata número sem prefixo R$, mantendo o padrão brasileiro com vírgula decimal
- * Exemplo: 3000 -> "3.000,00"
+ * Exemplo: 2789 -> "2.789,00"
  */
 export function formatPriceNumber(val: number | string | null | undefined): string {
-  const num = typeof val === 'number' ? val : parseCurrencyBRL(val);
+  const num = normalizePrice(val);
   return num.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }

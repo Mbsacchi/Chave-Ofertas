@@ -19,7 +19,15 @@ const BATCH_SIZE = 500;
 
 function parsePrice(val: any): number {
   if (val === null || val === undefined) return 0;
-  if (typeof val === 'number') return isNaN(val) ? 0 : val;
+  if (typeof val === 'number') {
+    if (isNaN(val)) return 0;
+    const strVal = val.toString();
+    const parts = strVal.split('.');
+    if (parts.length === 2 && parts[1].length === 3 && val < 100) {
+      return Math.round(val * 1000);
+    }
+    return val;
+  }
   let str = val.toString().trim();
   if (!str) return 0;
   str = str.replace(/[^\d.,]/g, '');

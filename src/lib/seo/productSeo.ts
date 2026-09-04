@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { Product } from '../../types';
+import { normalizePrice } from '../../utils/priceFormatter';
 
 export interface SeoMetadata {
   title: string;
@@ -31,7 +32,7 @@ export function generateProductMetadata(product?: Product | null): SeoMetadata {
     };
   }
 
-  const minPriceVal = typeof product.minPrice === 'number' && !isNaN(product.minPrice) ? product.minPrice : 0;
+  const minPriceVal = normalizePrice(product.minPrice);
   const formattedMinPrice = minPriceVal.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
   const rawOffers = Array.isArray(product.offers) ? product.offers : (Array.isArray(product.prices) ? product.prices : []);
   const otherStoresCount = Math.max(0, (rawOffers.length || 1) - 1);
@@ -85,9 +86,11 @@ export function generateProductJsonLd(product?: Product | null) {
   if (!product) return null;
 
   const rawOffers = Array.isArray(product.offers) ? product.offers : (Array.isArray(product.prices) ? product.prices : []);
+  const normalizedMin = normalizePrice(product.minPrice);
+  const normalizedMax = normalizePrice(product.maxPrice || product.minPrice, normalizedMin);
   const offersList = rawOffers.map((off: any) => ({
     '@type': 'Offer',
-    price: Number(off?.price) || product.minPrice || 0,
+    price: normalizePrice(off?.price || normalizedMin, normalizedMin),
     priceCurrency: 'BRL',
     priceValidUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     itemCondition: 'https://schema.org/NewCondition',
@@ -126,8 +129,8 @@ export function generateProductJsonLd(product?: Product | null) {
     offers: {
       '@type': 'AggregateOffer',
       priceCurrency: 'BRL',
-      lowPrice: Number(product.minPrice) || 0,
-      highPrice: Number(product.maxPrice || product.minPrice) || 0,
+      lowPrice: normalizedMin,
+      highPrice: normalizedMax,
       offerCount: Math.max(offersList.length, 1),
       offers: offersList.length > 0 ? offersList : undefined,
     },

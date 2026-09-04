@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { normalizePrice } from '../../src/utils/priceFormatter';
 
 // Configurações e Variáveis de Ambiente Awin & AliExpress
 export const AWIN_API_TOKEN = process.env.AWIN_API_TOKEN || '60b6489b-bffc-4f5d-887c-89a76b2ca853';
@@ -214,9 +215,9 @@ export async function syncAliExpressFromAwinApi(supabaseClient?: any): Promise<S
     for (const item of apiProducts) {
       const rawId = item.id || item.productId || item.aw_product_id || item.merchant_product_id || Math.random().toString(36).substring(2, 9);
       const title = (item.title || item.product_name || item.name || 'Produto AliExpress').trim();
-      const rawPromoPrice = parseFloat(item.price || item.search_price || item.promotionalPrice || item.display_price || '99.90');
-      const promotionalPrice = isNaN(rawPromoPrice) || rawPromoPrice <= 0 ? 99.90 : rawPromoPrice;
-      const rawOrigPrice = parseFloat(item.originalPrice || item.store_price || item.rrp || '0');
+      const rawPromoPrice = normalizePrice(item.price || item.search_price || item.promotionalPrice || item.display_price || '99.90');
+      const promotionalPrice = rawPromoPrice <= 0 ? 99.90 : rawPromoPrice;
+      const rawOrigPrice = normalizePrice(item.originalPrice || item.store_price || item.rrp || '0', promotionalPrice);
       const originalPrice = rawOrigPrice > promotionalPrice ? rawOrigPrice : Math.round(promotionalPrice * 1.25 * 100) / 100;
       const discountPercent = Math.round(((originalPrice - promotionalPrice) / originalPrice) * 100);
 

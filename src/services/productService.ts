@@ -1,6 +1,7 @@
 import { Product, StoreOffer, StoreId } from '../types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { fetchAllGlobalProducts } from './adminService';
+import { normalizePrice } from '../utils/priceFormatter';
 
 /**
  * Normaliza e protege qualquer objeto de produto contra propriedades nulas ou ausentes,
@@ -68,15 +69,15 @@ export function normalizeProduct(raw: any): Product {
     images = [finalImageUrl];
   }
 
-  // 3. Preços e Valores Numéricos
+  // 3. Preços e Valores Numéricos (Sanitizados e Imunes a Erros de Milhar/Centavos)
   const rawMin = raw.minPrice ?? raw.min_price ?? (Array.isArray(raw.prices) && raw.prices[0]?.price) ?? 0;
-  const minPrice = typeof rawMin === 'number' && !isNaN(rawMin) ? rawMin : (Number(rawMin) || 0);
+  const minPrice = normalizePrice(rawMin);
 
   const rawMax = raw.maxPrice ?? raw.max_price ?? raw.originalPrice ?? raw.original_price ?? minPrice;
-  const maxPrice = typeof rawMax === 'number' && !isNaN(rawMax) ? rawMax : (Number(rawMax) || minPrice);
+  const maxPrice = normalizePrice(rawMax, minPrice) || minPrice;
 
   const rawHist = raw.historicalLowestPrice ?? raw.historical_lowest_price ?? minPrice;
-  const historicalLowestPrice = typeof rawHist === 'number' && !isNaN(rawHist) ? rawHist : (Number(rawHist) || minPrice);
+  const historicalLowestPrice = normalizePrice(rawHist, minPrice) || minPrice;
 
   const bestStore = String(raw.bestStore || raw.best_store || 'Loja Parceira');
   const bestStoreId: StoreId = (raw.bestStoreId || raw.best_store_id || 'kabum') as StoreId;
@@ -84,12 +85,10 @@ export function normalizeProduct(raw: any): Product {
   // 4. Ofertas e Preços Multilojas (Garante product.offers e product.prices)
   const rawOffersList = Array.isArray(raw.offers) ? raw.offers : (Array.isArray(raw.prices) ? raw.prices : []);
   const normalizedOffers: StoreOffer[] = rawOffersList.map((off: any, index: number) => {
-    const offPrice = typeof off?.price === 'number' && !isNaN(off.price) ? off.price : (Number(off?.price) || minPrice);
-    const offOrig = typeof off?.originalPrice === 'number' && !isNaN(off.originalPrice)
-      ? off.originalPrice
-      : (typeof off?.original_price === 'number' && !isNaN(off.original_price)
-        ? off.original_price
-        : (Number(off?.originalPrice || off?.original_price) || offPrice));
+    const rawOffPrice = off?.price ?? off?.minPrice ?? off?.min_price ?? minPrice;
+    const offPrice = normalizePrice(rawOffPrice, minPrice) || minPrice;
+    const rawOffOrig = off?.originalPrice ?? off?.original_price ?? offPrice;
+    const offOrig = normalizePrice(rawOffOrig, offPrice) || offPrice;
 
     const offDiscount = offOrig > offPrice ? Math.round(((offOrig - offPrice) / offOrig) * 100) : 0;
 
@@ -136,9 +135,13 @@ export function normalizeProduct(raw: any): Product {
   }
 
   // 5. Histórico de Preços e Palavras-chave
-  const priceHistory = Array.isArray(raw.priceHistory || raw.price_history)
+  const rawHistoryList = Array.isArray(raw.priceHistory || raw.price_history)
     ? (raw.priceHistory || raw.price_history)
     : [];
+  const priceHistory = rawHistoryList.map((pt: any) => ({
+    ...pt,
+    minPrice: normalizePrice(pt?.minPrice ?? pt?.price, minPrice),
+  }));
   const searchKeywords = Array.isArray(raw.searchKeywords || raw.search_keywords)
     ? (raw.searchKeywords || raw.search_keywords)
     : [];
