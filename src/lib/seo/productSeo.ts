@@ -18,32 +18,54 @@ const SITE_URL = 'https://chaveofertas.com.br';
 /**
  * Gera Metadados Dinâmicos Otimizados para SEO e Motores de IA (GEO)
  */
-export function generateProductMetadata(product: Product): SeoMetadata {
-  const formattedMinPrice = product.minPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
-  const otherStoresCount = (product.offers?.length || 1) - 1;
+export function generateProductMetadata(product?: Product | null): SeoMetadata {
+  if (!product) {
+    return {
+      title: DEFAULT_TITLE,
+      description: DEFAULT_DESCRIPTION,
+      canonicalUrl: SITE_URL,
+      ogTitle: DEFAULT_TITLE,
+      ogDescription: DEFAULT_DESCRIPTION,
+      ogImage: 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?auto=format&fit=crop&w=600&q=80',
+      keywords: 'menor preço, comparador de preços, ofertas, desconto, cupons',
+    };
+  }
+
+  const minPriceVal = typeof product.minPrice === 'number' && !isNaN(product.minPrice) ? product.minPrice : 0;
+  const formattedMinPrice = minPriceVal.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+  const rawOffers = Array.isArray(product.offers) ? product.offers : (Array.isArray(product.prices) ? product.prices : []);
+  const otherStoresCount = Math.max(0, (rawOffers.length || 1) - 1);
+  const bestStore = String(product.bestStore || 'Loja Oficial').trim();
   const storeContext = otherStoresCount > 0 
-    ? `na ${product.bestStore} e mais ${otherStoresCount} loja(s)`
-    : `na loja oficial ${product.bestStore}`;
+    ? `na ${bestStore} e mais ${otherStoresCount} loja(s)`
+    : `na loja oficial ${bestStore}`;
+
+  const prodTitle = String(product.title || 'Produto').trim();
+  const prodBrand = String(product.brand || 'Geral').trim();
+  const prodCategory = String(product.categoryName || 'Geral').trim();
 
   // Título rigorosamente otimizado com 'Menor Preço'
-  const title = `${product.title} - Menor Preço R$ ${formattedMinPrice} | Chave Ofertas`;
+  const title = `${prodTitle} - Menor Preço R$ ${formattedMinPrice} | Chave Ofertas`;
 
   // Descrição persuasiva rica em entidades semânticas para LLMs e Rich Snippets
-  const description = `Compare o Menor Preço de ${product.title} a partir de R$ ${formattedMinPrice} ${storeContext}. Histórico de preços, cupons de desconto e entrega garantida no Chave Ofertas.`;
+  const description = `Compare o Menor Preço de ${prodTitle} a partir de R$ ${formattedMinPrice} ${storeContext}. Histórico de preços, cupons de desconto e entrega garantida no Chave Ofertas.`;
 
-  const canonicalUrl = `${SITE_URL}/produto/${product.slug || product.id}`;
+  const canonicalUrl = `${SITE_URL}/produto/${product.slug || product.id || ''}`;
   const keywords = Array.from(new Set([
-    product.title.toLowerCase(),
-    product.brand.toLowerCase(),
-    product.categoryName.toLowerCase(),
+    prodTitle.toLowerCase(),
+    prodBrand.toLowerCase(),
+    prodCategory.toLowerCase(),
     'menor preço',
     'comparador de preços',
     'ofertas',
     'desconto',
     'cupom',
-    product.bestStore.toLowerCase(),
-    ...(product.searchKeywords || [])
-  ])).join(', ');
+    bestStore.toLowerCase(),
+    ...(Array.isArray(product.searchKeywords) ? product.searchKeywords : [])
+  ])).filter(Boolean).join(', ');
+
+  const imageList = Array.isArray(product.images) ? product.images : (Array.isArray(product.galleryUrls) ? product.galleryUrls : []);
+  const ogImage = product.imageUrl || imageList[0] || 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?auto=format&fit=crop&w=600&q=80';
 
   return {
     title,
@@ -51,7 +73,7 @@ export function generateProductMetadata(product: Product): SeoMetadata {
     canonicalUrl,
     ogTitle: title,
     ogDescription: description,
-    ogImage: product.imageUrl,
+    ogImage,
     keywords,
   };
 }
@@ -59,47 +81,54 @@ export function generateProductMetadata(product: Product): SeoMetadata {
 /**
  * Gera Schema Markup JSON-LD completo com Product e AggregateOffer (Google Rich Snippets)
  */
-export function generateProductJsonLd(product: Product) {
-  const offersList = (product.offers || []).map((off) => ({
+export function generateProductJsonLd(product?: Product | null) {
+  if (!product) return null;
+
+  const rawOffers = Array.isArray(product.offers) ? product.offers : (Array.isArray(product.prices) ? product.prices : []);
+  const offersList = rawOffers.map((off: any) => ({
     '@type': 'Offer',
-    price: off.price,
+    price: Number(off?.price) || product.minPrice || 0,
     priceCurrency: 'BRL',
     priceValidUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     itemCondition: 'https://schema.org/NewCondition',
-    availability: off.inStock !== false ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
-    url: off.affiliateUrl || `${SITE_URL}/produto/${product.slug || product.id}`,
+    availability: off?.inStock !== false && off?.in_stock !== false ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+    url: off?.affiliateUrl || off?.affiliate_url || `${SITE_URL}/produto/${product.slug || product.id}`,
     seller: {
       '@type': 'Organization',
-      name: off.storeName,
+      name: String(off?.storeName || off?.store_name || product.bestStore || 'Loja Oficial'),
     },
   }));
+
+  const imageList = Array.isArray(product.images) 
+    ? product.images 
+    : (Array.isArray(product.galleryUrls) ? product.galleryUrls : []);
 
   const jsonLd = {
     '@context': 'https://schema.org',
     '@type': 'Product',
-    name: product.title,
-    image: [product.imageUrl, ...(product.galleryUrls || [])].filter(Boolean),
-    description: product.description || `Compre ${product.title} com o menor preço garantido e entrega no Brasil.`,
+    name: product.title || 'Produto',
+    image: [product.imageUrl, ...imageList].filter(Boolean),
+    description: product.description || `Compre ${product.title || 'o item'} com o menor preço garantido e entrega no Brasil.`,
     sku: product.sku || `SKU-${product.id}`,
     ...(product.ean ? { gtin13: product.ean } : {}),
     brand: {
       '@type': 'Brand',
       name: product.brand || 'Geral',
     },
-    category: product.categoryName,
+    category: product.categoryName || 'Geral',
     aggregateRating: {
       '@type': 'AggregateRating',
-      ratingValue: (product.rating || 4.8).toFixed(1),
-      reviewCount: product.reviewsCount || 100,
+      ratingValue: (Number(product.rating) || 4.8).toFixed(1),
+      reviewCount: Number(product.reviewsCount) || 100,
       bestRating: '5',
       worstRating: '1',
     },
     offers: {
       '@type': 'AggregateOffer',
       priceCurrency: 'BRL',
-      lowPrice: product.minPrice,
-      highPrice: product.maxPrice || product.minPrice,
-      offerCount: Math.max(product.offers?.length || 1, 1),
+      lowPrice: Number(product.minPrice) || 0,
+      highPrice: Number(product.maxPrice || product.minPrice) || 0,
+      offerCount: Math.max(offersList.length, 1),
       offers: offersList.length > 0 ? offersList : undefined,
     },
   };

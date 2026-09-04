@@ -53,6 +53,7 @@ export interface Product {
   sku: string;
   ean?: string;
   imageUrl: string;
+  images?: string[];
   galleryUrls?: string[];
   searchKeywords: string[];
   minPrice: number;
@@ -61,6 +62,7 @@ export interface Product {
   bestStore: string;
   bestStoreId: StoreId;
   offers: StoreOffer[];
+  prices?: any[];
   priceHistory: PriceHistoryPoint[];
   rating: number;
   reviewsCount: number;

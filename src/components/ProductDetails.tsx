@@ -18,8 +18,11 @@ import { PriceHistoryChart } from './PriceHistoryChart';
 import { incrementProductClick } from '../services/productAnalyticsService';
 import { useProductSeo, generateProductJsonLd } from '../lib/seo/productSeo';
 
+import { normalizeProduct } from '../services/productService';
+import { AlertCircle } from 'lucide-react';
+
 interface ProductDetailsProps {
-  product: Product;
+  product?: Product | null;
   onClose?: () => void;
   onOpenAlert?: (product: Product) => void;
 }
@@ -29,29 +32,65 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
   onClose,
   onOpenAlert,
 }) => {
+  // Se o produto for nulo ou indefinido, exibe estado amigável com botão de voltar
+  if (!product) {
+    return (
+      <div className="w-full bg-white dark:bg-dark-surface rounded-3xl p-6 sm:p-8 text-center space-y-4 border border-gray-100 dark:border-dark-border shadow-sm">
+        <div className="w-14 h-14 rounded-2xl bg-amber-100 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto shadow-sm">
+          <AlertCircle className="w-7 h-7" />
+        </div>
+        <h2 className="text-xl font-black text-gray-900 dark:text-white">
+          Produto não encontrado ou indisponível
+        </h2>
+        <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 max-w-md mx-auto">
+          O produto que você está procurando não foi localizado ou não está mais ativo na vitrine.
+        </p>
+        {onClose && (
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="py-2.5 px-5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-xs uppercase tracking-wider shadow-glow-amber cursor-pointer inline-flex items-center gap-2"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Voltar à Vitrine</span>
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Normalização profunda contra campos nulos do banco (title, images, prices, etc)
+  const safeProduct = normalizeProduct(product);
+
   // Geração Dinâmica de Meta Tags (SEO/GEO) e injeção no Head
-  useProductSeo(product);
-  const jsonLd = generateProductJsonLd(product);
+  useProductSeo(safeProduct);
+  const jsonLd = generateProductJsonLd(safeProduct);
 
   const { toggleFavorite, isFavorited, hasActiveAlert } = useAuth();
   const [copiedOfferId, setCopiedOfferId] = useState<string | null>(null);
   const [revealedOfferCoupons, setRevealedOfferCoupons] = useState<Record<string, boolean>>({});
 
-  const favorited = isFavorited(product.id);
-  const hasAlert = hasActiveAlert(product.id);
+  const favorited = isFavorited(safeProduct.id);
+  const hasAlert = hasActiveAlert(safeProduct.id);
 
-  const offersSorted = [...(product.offers || [])].sort((a, b) => {
-    const netA = a.price - (a.couponDiscount || 0);
-    const netB = b.price - (b.couponDiscount || 0);
+  const rawOffers = Array.isArray(safeProduct.offers) && safeProduct.offers.length > 0 
+    ? safeProduct.offers 
+    : (Array.isArray(safeProduct.prices) && safeProduct.prices.length > 0 ? safeProduct.prices : []);
+
+  const offersSorted = [...rawOffers].sort((a, b) => {
+    const netA = (Number(a?.price) || 0) - (Number(a?.couponDiscount) || 0);
+    const netB = (Number(b?.price) || 0) - (Number(b?.couponDiscount) || 0);
     return netA - netB;
   });
 
   const bestOffer = offersSorted[0] || {
-    id: 'off-1',
-    storeName: product.bestStore || 'Loja Parceira',
-    storeId: product.bestStoreId || 'kabum',
-    price: product.minPrice,
-    originalPrice: product.maxPrice,
+    id: `off-${safeProduct.id}`,
+    storeName: safeProduct.bestStore || 'Loja Parceira',
+    storeId: safeProduct.bestStoreId || 'kabum',
+    price: safeProduct.minPrice || 0,
+    originalPrice: safeProduct.maxPrice || safeProduct.minPrice || 0,
     discountPercent: 0,
     affiliateUrl: '#',
     installment: '10x sem juros',
@@ -63,7 +102,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
 
   const handleClaimOffer = (offer: typeof bestOffer) => {
     // 1. Rastreamento e incremento atômico de clique
-    incrementProductClick(product.id);
+    incrementProductClick(safeProduct.id);
 
     // 2. Copia código silenciosamente se houver cupom
     if (offer.couponCode && navigator?.clipboard?.writeText) {
@@ -80,16 +119,18 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
   return (
     <article
       role="article"
-      aria-label={`Comparador e Detalhes do Produto: ${product.title}`}
+      aria-label={`Comparador e Detalhes do Produto: ${safeProduct.title}`}
       itemScope
       itemType="https://schema.org/Product"
       className="w-full bg-white dark:bg-dark-surface rounded-3xl p-4 sm:p-6 md:p-8 space-y-6 sm:space-y-8"
     >
       {/* Schema Markup JSON-LD (Product + AggregateOffer) para Rich Snippets do Google e Crawlers LLM */}
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
+      {jsonLd && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
+      )}
 
       {/* 1. Header com Navegação e Ações Rápidas */}
       <header className="flex items-center justify-between gap-4 pb-4 border-b border-gray-100 dark:border-dark-border">
@@ -108,7 +149,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
           {onOpenAlert && (
             <button
               type="button"
-              onClick={() => onOpenAlert(product)}
+              onClick={() => onOpenAlert(safeProduct)}
               className={`p-2 rounded-2xl border transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer ${
                 hasAlert
                   ? 'bg-amber-500 text-white border-amber-600 shadow-glow-amber'
@@ -122,7 +163,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
 
           <button
             type="button"
-            onClick={() => toggleFavorite(product.id)}
+            onClick={() => toggleFavorite(safeProduct.id)}
             className={`p-2 rounded-2xl border transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer ${
               favorited
                 ? 'bg-rose-500 text-white border-rose-600 shadow-glow-red'
@@ -139,17 +180,17 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
       <section aria-labelledby="product-title" className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
         {/* Imagem */}
         <figure className="md:col-span-5 bg-white rounded-3xl p-6 border border-gray-100 dark:border-dark-border flex items-center justify-center relative shadow-sm min-h-[260px] m-0">
-          {product.clickCount && product.clickCount > 5 ? (
+          {safeProduct.clickCount && safeProduct.clickCount > 5 ? (
             <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-gradient-to-r from-orange-500 to-amber-500 text-white text-[10px] font-black uppercase tracking-wider shadow-md flex items-center gap-1">
               <Flame className="w-3.5 h-3.5 fill-current" />
-              <span>🔥 EM ALTA ({product.clickCount} cliques)</span>
+              <span>🔥 EM ALTA ({safeProduct.clickCount} cliques)</span>
             </div>
           ) : null}
 
           <img
             itemProp="image"
-            src={product.imageUrl}
-            alt={`${product.title} - Menor Preço e Ofertas`}
+            src={safeProduct.imageUrl}
+            alt={`${safeProduct.title} - Menor Preço e Ofertas`}
             className="max-h-56 max-w-full object-contain hover:scale-105 transition-transform duration-300"
           />
         </figure>
@@ -158,14 +199,14 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
         <div className="md:col-span-7 space-y-4">
           <div className="space-y-1">
             <span className="text-xs font-black uppercase tracking-wider text-amber-500">
-              {product.categoryName} • <span itemProp="brand">{product.brand}</span>
+              {safeProduct.categoryName} • <span itemProp="brand">{safeProduct.brand}</span>
             </span>
             <h1 id="product-title" itemProp="name" className="text-xl sm:text-2xl font-black text-gray-900 dark:text-white leading-tight">
-              {product.title}
+              {safeProduct.title}
             </h1>
-            {product.ean && (
+            {safeProduct.ean && (
               <span className="text-[11px] font-mono text-gray-400 block">
-                EAN / Código de Barras: <span itemProp="gtin13">{product.ean}</span>
+                EAN / Código de Barras: <span itemProp="gtin13">{safeProduct.ean}</span>
               </span>
             )}
           </div>
@@ -177,9 +218,9 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
               </span>
               <div className="flex items-baseline gap-2">
                 <span className="text-2xl sm:text-3xl font-black text-emerald-600 dark:text-emerald-400">
-                  R$ {product.minPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  R$ {(safeProduct.minPrice || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </span>
-                <span className="text-xs font-bold text-gray-500">na {product.bestStore}</span>
+                <span className="text-xs font-bold text-gray-500">na {safeProduct.bestStore}</span>
               </div>
             </div>
 
@@ -194,7 +235,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
           </div>
 
           <p itemProp="description" className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
-            {product.description || `Compare as melhores ofertas de ${product.title} nas lojas oficiais parceiras com entrega garantida e menor preço verificado.`}
+            {safeProduct.description || `Compare as melhores ofertas de ${safeProduct.title} nas lojas oficiais parceiras com entrega garantida e menor preço verificado.`}
           </p>
         </div>
       </section>
@@ -215,7 +256,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
                   Marca / Fabricante
                 </th>
                 <td className="py-2.5 px-4 font-medium text-gray-900 dark:text-white">
-                  {product.brand}
+                  {safeProduct.brand}
                 </td>
               </tr>
               <tr className="border-b border-gray-100 dark:border-dark-border">
@@ -223,7 +264,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
                   Categoria
                 </th>
                 <td className="py-2.5 px-4 font-medium text-gray-900 dark:text-white">
-                  {product.categoryName}
+                  {safeProduct.categoryName}
                 </td>
               </tr>
               <tr className="border-b border-gray-100 dark:border-dark-border">
@@ -231,16 +272,16 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
                   Menor Preço Verificado
                 </th>
                 <td className="py-2.5 px-4 font-extrabold text-emerald-600 dark:text-emerald-400">
-                  R$ {product.minPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (Vendido por {product.bestStore})
+                  R$ {(safeProduct.minPrice || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (Vendido por {safeProduct.bestStore})
                 </td>
               </tr>
-              {product.ean && (
+              {safeProduct.ean && (
                 <tr className="border-b border-gray-100 dark:border-dark-border">
                   <th scope="row" className="py-2.5 px-4 font-bold text-gray-500 dark:text-gray-400 bg-gray-100/50 dark:bg-dark-surface/50">
                     Código EAN / Barras
                   </th>
                   <td className="py-2.5 px-4 font-mono font-medium text-gray-900 dark:text-white">
-                    {product.ean}
+                    {safeProduct.ean}
                   </td>
                 </tr>
               )}
@@ -249,7 +290,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
                   Código de Identificação / SKU
                 </th>
                 <td className="py-2.5 px-4 font-mono font-medium text-gray-900 dark:text-white">
-                  {product.sku}
+                  {safeProduct.sku}
                 </td>
               </tr>
               <tr>
@@ -269,7 +310,7 @@ export const ProductDetails: React.FC<ProductDetailsProps> = ({
       {/* 4. Gráfico de Evolução de Preços Interativo (Recharts) */}
       <section aria-labelledby="chart-heading" className="space-y-2">
         <h2 id="chart-heading" className="sr-only">Histórico de Preços</h2>
-        <PriceHistoryChart product={product} />
+        <PriceHistoryChart product={safeProduct} />
       </section>
 
       {/* 5. Comparativo Multilojas: Outras opções de compra */}

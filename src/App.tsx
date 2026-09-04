@@ -20,6 +20,8 @@ import { groupAndConsolidateProducts } from './lib/comparator/productGrouper';
 import { Product, StoreId, SearchState, Coupon } from './types';
 import { fetchLiveDatabaseProducts } from './services/adminService';
 import { fetchActiveCoupons } from './services/couponService';
+import { fetchProductBySlugOrId, normalizeProduct } from './services/productService';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useAuth } from './context/AuthContext';
 import { useBodyScrollLock } from './lib/hooks/useBodyScrollLock';
 import { useHardwareBackNavigation } from './lib/hooks/useHardwareBackNavigation';
@@ -31,7 +33,8 @@ import {
   ChevronRight,
   X,
   SlidersHorizontal,
-  ArrowLeft
+  ArrowLeft,
+  AlertCircle
 } from 'lucide-react';
 
 const ITEMS_PER_PAGE = 16;
@@ -188,13 +191,17 @@ export const AppContent: React.FC = () => {
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
   const [isMobileFilterOpen, setIsMobileFilterOpen] = useState(false);
 
-  // Modals
+  // Modals & Product Deep-linking
   const [comparingProduct, setComparingProduct] = useState<Product | null>(null);
   const [alertProduct, setAlertProduct] = useState<Product | null>(null);
+  const [productRouteNotFound, setProductRouteNotFound] = useState(false);
+  const [isLoadingProductRoute, setIsLoadingProductRoute] = useState(false);
 
   const handleOpenProduct = (prod: Product) => {
-    setComparingProduct(prod);
-    const slug = prod.slug || prod.id;
+    const safeProduct = normalizeProduct(prod);
+    setComparingProduct(safeProduct);
+    setProductRouteNotFound(false);
+    const slug = safeProduct.slug || safeProduct.id;
     if (slug) {
       window.history.pushState({ slug }, '', `/produto/${slug}`);
     }
@@ -202,6 +209,7 @@ export const AppContent: React.FC = () => {
 
   const handleCloseProduct = () => {
     setComparingProduct(null);
+    setProductRouteNotFound(false);
     if (window.location.pathname.startsWith('/produto/')) {
       window.history.pushState({}, '', '/');
     }
@@ -209,21 +217,58 @@ export const AppContent: React.FC = () => {
 
   // Sincronização de URL deep-linking e popstate para /produto/[slug]
   useEffect(() => {
-    const handleProductRoute = () => {
+    let isCancelled = false;
+
+    const handleProductRoute = async () => {
       const pathname = window.location.pathname;
       if (pathname.startsWith('/produto/')) {
-        const slug = pathname.replace(/^\/produto\//, '').replace(/\/$/, '');
+        const rawSlug = pathname.replace(/^\/produto\//, '').replace(/\/$/, '');
+        const slug = decodeURIComponent(rawSlug).trim();
+        if (!slug) return;
+
+        // 1. Tentar encontrar nos produtos já carregados localmente
         const matched = allProducts.find((p) => p.slug === slug || p.id === slug);
         if (matched) {
-          setComparingProduct(matched);
+          setComparingProduct(normalizeProduct(matched));
+          setProductRouteNotFound(false);
+          return;
         }
+
+        // 2. Se não estiver nos produtos locais, buscar via Supabase/API com resiliência
+        setIsLoadingProductRoute(true);
+        try {
+          const remoteProduct = await fetchProductBySlugOrId(slug);
+          if (isCancelled) return;
+
+          if (remoteProduct) {
+            setComparingProduct(remoteProduct);
+            setProductRouteNotFound(false);
+          } else {
+            setComparingProduct(null);
+            setProductRouteNotFound(true);
+          }
+        } catch (err) {
+          if (isCancelled) return;
+          console.error('Erro ao resolver rota do produto:', err);
+          setComparingProduct(null);
+          setProductRouteNotFound(true);
+        } finally {
+          if (!isCancelled) {
+            setIsLoadingProductRoute(false);
+          }
+        }
+      } else {
+        setProductRouteNotFound(false);
       }
     };
 
     window.addEventListener('popstate', handleProductRoute);
     handleProductRoute();
 
-    return () => window.removeEventListener('popstate', handleProductRoute);
+    return () => {
+      isCancelled = true;
+      window.removeEventListener('popstate', handleProductRoute);
+    };
   }, [allProducts]);
 
   // Lock body scroll whenever any drawer, bottom sheet, or modal is open
@@ -232,7 +277,9 @@ export const AppContent: React.FC = () => {
     isMobileFilterOpen ||
     Boolean(comparingProduct) ||
     Boolean(alertProduct) ||
-    showAuthModal;
+    showAuthModal ||
+    productRouteNotFound ||
+    isLoadingProductRoute;
 
   useBodyScrollLock(isAnyOverlayOpen);
 
@@ -851,15 +898,49 @@ export const AppContent: React.FC = () => {
         onOpenAdmin={navigateToAdmin}
       />
 
+      {/* Product Route Not Found Fallback Modal */}
+      {productRouteNotFound && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="product-not-found-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+        >
+          <div className="bg-white dark:bg-dark-card border border-gray-100 dark:border-dark-border rounded-2xl p-6 sm:p-8 max-w-md w-full shadow-2xl text-center space-y-5">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center ring-8 ring-amber-500/10">
+              <AlertCircle className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
+              <h3 id="product-not-found-modal-title" className="text-xl font-extrabold text-gray-900 dark:text-white">
+                Produto não encontrado ou indisponível
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">
+                Não conseguimos localizar as informações deste produto. Ele pode ter sido removido ou o link está desatualizado.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleCloseProduct}
+              className="w-full py-3.5 px-6 rounded-xl font-bold text-sm bg-primary hover:bg-primary-hover text-white transition-all shadow-lg shadow-primary/20 active:scale-95 flex items-center justify-center gap-2"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Voltar à Vitrine</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Modals */}
-      <PriceComparisonModal
-        product={comparingProduct}
-        onClose={handleCloseProduct}
-        onOpenAlert={(p) => {
-          handleCloseProduct();
-          setAlertProduct(p);
-        }}
-      />
+      <ErrorBoundary onReset={handleCloseProduct}>
+        <PriceComparisonModal
+          product={comparingProduct}
+          onClose={handleCloseProduct}
+          onOpenAlert={(p) => {
+            handleCloseProduct();
+            setAlertProduct(p);
+          }}
+        />
+      </ErrorBoundary>
 
       <PriceAlertModal
         product={alertProduct}

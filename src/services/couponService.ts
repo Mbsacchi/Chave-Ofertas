@@ -91,8 +91,8 @@ export function mapSupabaseCouponToCoupon(row: any): Coupon {
 
 /**
  * Busca todos os cupons reais e ativos diretamente do banco de dados Supabase
- * Aplica cláusula de filtro na consulta ao Supabase (ends_at >= now() ou ends_at is null)
- * garantindo que cupons vencidos NUNCA sejam carregados ou renderizados na vitrine.
+ * Suporta tanto a coluna moderna 'ends_at' quanto a coluna existente 'valid_until' (ou 'expires_at').
+ * Garante que cupons vencidos NUNCA sejam carregados ou renderizados na vitrine.
  */
 export async function fetchActiveCoupons(): Promise<Coupon[]> {
   if (!isSupabaseConfigured) {
@@ -102,29 +102,13 @@ export async function fetchActiveCoupons(): Promise<Coupon[]> {
 
   try {
     const now = new Date();
-    const nowIso = now.toISOString();
 
-    // Consulta ao Supabase com filtro de cupons válidos (ends_at >= agora OU ends_at nulo)
-    let query = supabase
+    // Consulta ao Supabase usando select('*') para ser totalmente imune a variações de colunas
+    const { data, error } = await supabase
       .from('coupons')
       .select('*')
       .eq('is_active', true)
-      .or(`ends_at.gte.${nowIso},ends_at.is.null`)
       .order('created_at', { ascending: false });
-
-    let { data, error } = await query;
-
-    // Fallback de retrocompatibilidade caso a coluna ends_at não suporte .or() diretamente
-    if (error) {
-      console.warn('[CouponService] Tentando fallback para consulta de cupons ativos:', error.message);
-      const fallbackRes = await supabase
-        .from('coupons')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: false });
-      data = fallbackRes.data;
-      error = fallbackRes.error;
-    }
 
     if (error) {
       console.warn('[CouponService] Erro ao buscar cupons no Supabase:', error.message);
@@ -135,13 +119,14 @@ export async function fetchActiveCoupons(): Promise<Coupon[]> {
       return [];
     }
 
-    // Filtro adicional de segurança: garante que cupons vencidos NUNCA cheguem à vitrine
+    // Filtro estrito de segurança: garante que cupons vencidos NUNCA cheguem à vitrine
     return data
       .filter((row: any) => {
         const tracking = row.awin_tracking_url || row.tracking_url;
         if (!row.code || !tracking) return false;
 
-        const expiryStr = row.ends_at || row.valid_until;
+        // Suporte a qualquer nome de coluna de expiração (ends_at, valid_until, expires_at, end_date)
+        const expiryStr = row.ends_at || row.valid_until || row.expires_at || row.end_date;
         if (expiryStr) {
           const expiry = new Date(expiryStr);
           if (!isNaN(expiry.getTime()) && expiry < now) {
@@ -149,7 +134,7 @@ export async function fetchActiveCoupons(): Promise<Coupon[]> {
           }
         }
 
-        const startStr = row.starts_at || row.valid_from;
+        const startStr = row.starts_at || row.valid_from || row.start_date;
         if (startStr) {
           const start = new Date(startStr);
           if (!isNaN(start.getTime()) && start > now) {
@@ -305,7 +290,8 @@ export async function toggleCouponActive(id: string, isActive: boolean): Promise
 }
 
 /**
- * Exclui permanentemente do Supabase todos os cupons cuja validade já expirou
+ * Exclui permanentemente do Supabase todos os cupons cuja validade já expirou.
+ * Totalmente resiliente a qualquer nome de coluna existente no banco (ends_at, valid_until, expires_at, end_date).
  * Retorna a quantidade de cupons excluídos com sucesso.
  */
 export async function deleteExpiredCoupons(): Promise<{ count: number }> {
@@ -315,10 +301,10 @@ export async function deleteExpiredCoupons(): Promise<{ count: number }> {
 
   const now = new Date();
 
-  // 1. Busca todos os cupons para identificar os registros com ends_at ou valid_until expirado
+  // 1. Busca os registros com select('*') para ser imune a colunas ausentes
   const { data: coupons, error: fetchErr } = await supabase
     .from('coupons')
-    .select('id, ends_at, valid_until');
+    .select('*');
 
   if (fetchErr) {
     throw new Error(`Erro ao verificar cupons expirados: ${fetchErr.message}`);
@@ -328,9 +314,10 @@ export async function deleteExpiredCoupons(): Promise<{ count: number }> {
     return { count: 0 };
   }
 
+  // Identifica todos os IDs expirados checando todas as variantes de coluna de expiração
   const expiredIds = coupons
     .filter((c: any) => {
-      const expStr = c.ends_at || c.valid_until;
+      const expStr = c.ends_at || c.valid_until || c.expires_at || c.end_date;
       if (!expStr) return false;
       const expDate = new Date(expStr);
       return !isNaN(expDate.getTime()) && expDate < now;
@@ -341,14 +328,18 @@ export async function deleteExpiredCoupons(): Promise<{ count: number }> {
     return { count: 0 };
   }
 
-  // 2. Executa a exclusão de todos os IDs vencidos
-  const { error: delErr } = await supabase
-    .from('coupons')
-    .delete()
-    .in('id', expiredIds);
+  // 2. Executa a exclusão em lotes de até 50 registros por requisição
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < expiredIds.length; i += BATCH_SIZE) {
+    const batch = expiredIds.slice(i, i + BATCH_SIZE);
+    const { error: delErr } = await supabase
+      .from('coupons')
+      .delete()
+      .in('id', batch);
 
-  if (delErr) {
-    throw new Error(`Erro ao excluir cupons expirados: ${delErr.message}`);
+    if (delErr) {
+      throw new Error(`Erro ao excluir cupons expirados: ${delErr.message}`);
+    }
   }
 
   return { count: expiredIds.length };

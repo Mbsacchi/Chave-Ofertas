@@ -478,17 +478,29 @@ async function runRestCouponSync() {
         }
       }
 
-      // Limpeza / Inativação de cupons expirados
+      // Limpeza / Inativação de cupons expirados (resiliente a qualquer schema)
       try {
-        const nowIso = new Date().toISOString();
-        await supabase
-          .from('coupons')
-          .update({ is_active: false, updated_at: nowIso })
-          .lt('ends_at', nowIso);
-        await supabase
-          .from('coupons')
-          .update({ is_active: false, updated_at: nowIso })
-          .lt('valid_until', nowIso);
+        const now = new Date();
+        const { data: allCoupons } = await supabase.from('coupons').select('*');
+        if (allCoupons && allCoupons.length > 0) {
+          const expiredIds = allCoupons
+            .filter((c) => {
+              const exp = c.ends_at || c.valid_until || c.expires_at || c.end_date;
+              return Boolean(exp && new Date(exp) < now && c.is_active !== false);
+            })
+            .map((c) => c.id);
+
+          if (expiredIds.length > 0) {
+            const nowIso = now.toISOString();
+            for (let i = 0; i < expiredIds.length; i += 50) {
+              const batch = expiredIds.slice(i, i + 50);
+              await supabase
+                .from('coupons')
+                .update({ is_active: false, updated_at: nowIso })
+                .in('id', batch);
+            }
+          }
+        }
       } catch (_) {}
 
       console.log(`💾 Sucesso: ${validCoupons.length} cupons reais gravados/atualizados no Supabase!`);

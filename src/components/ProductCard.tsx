@@ -4,6 +4,7 @@ import { Product } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { sanitizeUrl } from '../lib/security/sanitizer';
 import { incrementProductClick } from '../services/productAnalyticsService';
+import { normalizeProduct } from '../services/productService';
 
 interface ProductCardProps {
   product: Product;
@@ -13,17 +14,19 @@ interface ProductCardProps {
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({
-  product,
+  product: rawProduct,
   isFeatured = false,
   onOpenCompare,
   onOpenAlert,
 }) => {
+  const product = normalizeProduct(rawProduct);
   const { toggleFavorite, isFavorited, hasActiveAlert } = useAuth();
   const favorited = isFavorited(product.id);
   const hasAlert = hasActiveAlert(product.id);
   const [copiedCoupon, setCopiedCoupon] = useState(false);
 
   const bestOffer = product.offers[0] || {
+    id: `${product.id}-default`,
     price: product.minPrice,
     originalPrice: product.maxPrice,
     storeName: product.bestStore,

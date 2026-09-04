@@ -404,10 +404,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       // Filtro de Status
       if (couponStatusFilter === 'active') {
         const isAct = c.isActive !== false && c.is_active !== false;
-        const notExp = !c.ends_at || new Date(c.ends_at) >= now;
+        const exp = c.ends_at || c.validUntil || (c as any).valid_until;
+        const notExp = !exp || new Date(exp) >= now;
         if (!isAct || !notExp) return false;
       } else if (couponStatusFilter === 'expired') {
-        const isExp = c.ends_at && new Date(c.ends_at) < now;
+        const exp = c.ends_at || c.validUntil || (c as any).valid_until;
+        const isExp = Boolean(exp && new Date(exp) < now);
         const isInactive = c.isActive === false || c.is_active === false;
         if (!isExp && !isInactive) return false;
       }
@@ -2435,7 +2437,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800/80">
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Cupons Ativos</span>
                 <p className="text-2xl font-black text-emerald-400 mt-1">
-                  {adminCoupons.filter(c => (c.isActive !== false && c.is_active !== false) && (!c.ends_at || new Date(c.ends_at) >= new Date())).length}
+                  {adminCoupons.filter(c => {
+                    const exp = c.ends_at || c.validUntil || (c as any).valid_until;
+                    return (c.isActive !== false && c.is_active !== false) && (!exp || new Date(exp) >= new Date());
+                  }).length}
                 </p>
                 <span className="text-[10px] text-emerald-500/80">Visíveis na vitrine</span>
               </div>

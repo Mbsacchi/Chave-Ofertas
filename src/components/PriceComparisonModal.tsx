@@ -6,6 +6,7 @@ import { sanitizeUrl } from '../lib/security/sanitizer';
 import { PriceHistoryChart } from './PriceHistoryChart';
 import { incrementProductClick } from '../services/productAnalyticsService';
 import { useProductSeo, generateProductJsonLd } from '../lib/seo/productSeo';
+import { normalizeProduct } from '../services/productService';
 
 interface PriceComparisonModalProps {
   product: Product | null;
@@ -18,30 +19,51 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
   onClose,
   onOpenAlert,
 }) => {
+  if (!product) return null;
+
+  // Normaliza o produto com proteção rigorosa contra campos nulos do banco
+  const safeProduct = normalizeProduct(product);
+
   // Geração Dinâmica de Metadados e JSON-LD
-  useProductSeo(product);
-  const jsonLd = product ? generateProductJsonLd(product) : null;
+  useProductSeo(safeProduct);
+  const jsonLd = generateProductJsonLd(safeProduct);
 
   const { toggleFavorite, isFavorited, hasActiveAlert } = useAuth();
 
-  if (!product) return null;
+  const rawOffers = Array.isArray(safeProduct.offers) && safeProduct.offers.length > 0
+    ? safeProduct.offers
+    : (Array.isArray(safeProduct.prices) && safeProduct.prices.length > 0 ? safeProduct.prices : []);
 
-  const offersSorted = [...product.offers].sort((a, b) => {
-    const netA = a.price - (a.couponDiscount || 0);
-    const netB = b.price - (b.couponDiscount || 0);
+  const offersSorted = [...rawOffers].sort((a, b) => {
+    const netA = (Number(a?.price) || 0) - (Number(a?.couponDiscount) || 0);
+    const netB = (Number(b?.price) || 0) - (Number(b?.couponDiscount) || 0);
     return netA - netB;
   });
 
-  const bestOffer = offersSorted[0];
-  const favorited = isFavorited(product.id);
-  const hasAlert = hasActiveAlert(product.id);
+  const bestOffer = offersSorted[0] || {
+    id: `off-${safeProduct.id}`,
+    storeName: safeProduct.bestStore || 'Loja Parceira',
+    storeId: safeProduct.bestStoreId || 'kabum',
+    price: safeProduct.minPrice || 0,
+    originalPrice: safeProduct.maxPrice || safeProduct.minPrice || 0,
+    discountPercent: 0,
+    affiliateUrl: '#',
+    installment: '10x sem juros',
+    freeShipping: true,
+    rating: 4.8,
+    reviewsCount: 100,
+    lastUpdated: 'Agora',
+  };
+
+  const favorited = isFavorited(safeProduct.id);
+  const hasAlert = hasActiveAlert(safeProduct.id);
 
   const [copiedOfferId, setCopiedOfferId] = useState<string | null>(null);
   const [revealedOfferCoupons, setRevealedOfferCoupons] = useState<Record<string, boolean>>({});
 
   const handleClaimOffer = (offer: typeof bestOffer) => {
     // 1. Rastreamento e incremento atômico de clique de popularidade
-    incrementProductClick(product.id);
+    incrementProductClick(safeProduct.id);
 
     // 2. Copia cupom silenciosamente se houver
     if (offer.couponCode && navigator?.clipboard?.writeText) {
@@ -58,7 +80,7 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
     <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 bg-black/80 backdrop-blur-md animate-fade-in overflow-y-auto">
       <article 
         role="article"
-        aria-label={`Detalhes e Comparador de Preços: ${product.title}`}
+        aria-label={`Detalhes e Comparador de Preços: ${safeProduct.title}`}
         itemScope
         itemType="https://schema.org/Product"
         className="relative w-full max-h-[92vh] sm:max-h-[90vh] sm:max-w-4xl bg-white dark:bg-dark-surface border-t sm:border border-gray-200 dark:border-dark-border rounded-t-3xl sm:rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl overflow-y-auto scrollbar-thin my-0 sm:my-auto flex flex-col"
@@ -93,25 +115,25 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
               </div>
             ) : bestOffer.discountPercent >= 10 ? (
               <div className="absolute top-2.5 left-2.5 px-2.5 py-1 rounded-lg bg-gradient-to-r from-amber-600 to-orange-600 text-white text-[10px] font-black uppercase tracking-wider shadow-md flex items-center gap-1 z-10">
-                <Clock className="w-3 h-3" />
+                <Clock className="w-3.5 h-3.5" />
                 <span>⏳ ACABA HOJE</span>
               </div>
             ) : (
               <div className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-lg bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider shadow-md flex items-center gap-1 z-10">
-                <Zap className="w-3 h-3 fill-current" />
+                <Zap className="w-3.5 h-3.5 fill-current" />
                 <span>⚡ MENOR PREÇO</span>
               </div>
             )}
 
             <div className="w-full h-full bg-white rounded-lg p-3 flex items-center justify-center shadow-sm">
               <img
-                src={product.imageUrl}
-                alt={product.title}
+                src={safeProduct.imageUrl}
+                alt={safeProduct.title}
                 className="max-h-40 sm:max-h-56 w-auto max-w-full object-contain transition-transform duration-300 group-hover:scale-105"
               />
             </div>
             <button
-              onClick={() => toggleFavorite(product.id)}
+              onClick={() => toggleFavorite(safeProduct.id)}
               className={`absolute top-2.5 right-2.5 p-2 rounded-full border shadow-sm transition-all active:scale-90 ${
                 favorited
                   ? 'bg-rose-500 text-white border-rose-600 shadow-rose-500/30'
@@ -128,12 +150,12 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
             <div>
               <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap mb-1.5 sm:mb-2">
                 <span className="px-2.5 py-0.5 rounded-full text-[9px] sm:text-[10px] font-bold uppercase tracking-wider bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/50">
-                  {product.categoryName}
+                  {safeProduct.categoryName}
                 </span>
                 <span className="text-[11px] sm:text-xs font-semibold text-gray-500 dark:text-gray-400">
-                  Marca: <strong className="text-gray-800 dark:text-gray-200">{product.brand}</strong>
+                  Marca: <strong className="text-gray-800 dark:text-gray-200">{safeProduct.brand}</strong>
                 </span>
-                {product.isVerified && (
+                {safeProduct.isVerified && (
                   <span className="flex items-center gap-1 text-[10px] sm:text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
                     <ShieldCheck className="w-3.5 h-3.5" />
                     <span>Preço Auditado</span>
@@ -142,21 +164,21 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
               </div>
 
               <h2 className="text-base sm:text-xl md:text-2xl font-black text-gray-900 dark:text-white leading-snug">
-                {product.title}
+                {safeProduct.title}
               </h2>
 
               <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400 mt-1.5 sm:mt-2 leading-relaxed line-clamp-2 sm:line-clamp-3">
-                {product.description}
+                {safeProduct.description}
               </p>
 
               {/* Rating */}
               <div className="flex items-center gap-2 mt-2 sm:mt-3">
                 <div className="flex items-center gap-1 text-amber-500">
                   <Star className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-amber-400 text-amber-400" />
-                  <span className="text-xs font-black text-gray-900 dark:text-white">{product.rating}</span>
+                  <span className="text-xs font-black text-gray-900 dark:text-white">{safeProduct.rating}</span>
                 </div>
                 <span className="text-[11px] sm:text-xs text-gray-400">
-                  ({product.reviewsCount.toLocaleString('pt-BR')} avaliações reais)
+                  ({(safeProduct.reviewsCount || 0).toLocaleString('pt-BR')} avaliações reais)
                 </span>
               </div>
             </div>
@@ -166,7 +188,7 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
               <div>
                 {bestOffer.originalPrice > bestOffer.price && (
                   <span className="text-xs sm:text-sm text-gray-400 dark:text-gray-500 font-semibold line-through block">
-                    De: R$ {bestOffer.originalPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    De: R$ {(bestOffer.originalPrice || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                   </span>
                 )}
                 <div className="flex items-baseline gap-2 flex-wrap">
@@ -174,7 +196,7 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
                     Por:
                   </span>
                   <span className="text-2xl sm:text-3xl md:text-4xl font-black text-emerald-600 dark:text-emerald-400 tracking-tight">
-                    R$ {bestOffer.price.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    R$ {(bestOffer.price || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                   </span>
                   {bestOffer.discountPercent > 0 && (
                     <span className="px-2 py-0.5 rounded-md text-xs font-black bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300">
@@ -189,7 +211,7 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
 
               <div className="flex items-center gap-2 pt-1 sm:pt-0">
                 <button
-                  onClick={() => onOpenAlert(product)}
+                  onClick={() => onOpenAlert(safeProduct)}
                   className={`flex-1 sm:flex-initial px-3 py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer ${
                     hasAlert
                       ? 'bg-amber-50 dark:bg-amber-950/60 border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400'
@@ -230,24 +252,24 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
           </h3>
           <div className="overflow-hidden rounded-2xl border border-gray-100 dark:border-dark-border bg-gray-50/40 dark:bg-dark-card/40">
             <table className="w-full text-xs text-left border-collapse">
-              <caption className="sr-only">Especificações técnicas de {product.title}</caption>
+              <caption className="sr-only">Especificações técnicas de {safeProduct.title}</caption>
               <tbody>
                 <tr className="border-b border-gray-100 dark:border-dark-border">
                   <th scope="row" className="py-2 px-3 font-bold text-gray-500 dark:text-gray-400 w-1/3 bg-gray-100/40 dark:bg-dark-surface/40">Marca</th>
-                  <td className="py-2 px-3 font-medium text-gray-900 dark:text-white">{product.brand}</td>
+                  <td className="py-2 px-3 font-medium text-gray-900 dark:text-white">{safeProduct.brand}</td>
                 </tr>
                 <tr className="border-b border-gray-100 dark:border-dark-border">
                   <th scope="row" className="py-2 px-3 font-bold text-gray-500 dark:text-gray-400 bg-gray-100/40 dark:bg-dark-surface/40">Categoria</th>
-                  <td className="py-2 px-3 font-medium text-gray-900 dark:text-white">{product.categoryName}</td>
+                  <td className="py-2 px-3 font-medium text-gray-900 dark:text-white">{safeProduct.categoryName}</td>
                 </tr>
                 <tr className="border-b border-gray-100 dark:border-dark-border">
                   <th scope="row" className="py-2 px-3 font-bold text-gray-500 dark:text-gray-400 bg-gray-100/40 dark:bg-dark-surface/40">Menor Preço</th>
-                  <td className="py-2 px-3 font-extrabold text-emerald-600 dark:text-emerald-400">R$ {product.minPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} ({product.bestStore})</td>
+                  <td className="py-2 px-3 font-extrabold text-emerald-600 dark:text-emerald-400">R$ {(safeProduct.minPrice || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} ({safeProduct.bestStore})</td>
                 </tr>
-                {product.ean && (
+                {safeProduct.ean && (
                   <tr className="border-b border-gray-100 dark:border-dark-border">
                     <th scope="row" className="py-2 px-3 font-bold text-gray-500 dark:text-gray-400 bg-gray-100/40 dark:bg-dark-surface/40">Código EAN</th>
-                    <td className="py-2 px-3 font-mono text-gray-900 dark:text-white">{product.ean}</td>
+                    <td className="py-2 px-3 font-mono text-gray-900 dark:text-white">{safeProduct.ean}</td>
                   </tr>
                 )}
                 <tr>
@@ -265,7 +287,7 @@ export const PriceComparisonModal: React.FC<PriceComparisonModalProps> = ({
         {/* Recharts Interactive Price History */}
         <section aria-labelledby="modal-chart-heading" className="my-3">
           <h3 id="modal-chart-heading" className="sr-only">Histórico de Preços</h3>
-          <PriceHistoryChart product={product} />
+          <PriceHistoryChart product={safeProduct} />
         </section>
 
         {/* Store Comparison - Mobile-first stacked cards */}

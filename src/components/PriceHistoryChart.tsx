@@ -11,12 +11,14 @@ import {
 import { TrendingDown, TrendingUp, Minus, Flame, Calendar, DollarSign } from 'lucide-react';
 import { Product, PriceHistoryPoint } from '../types';
 import { fetchProductPriceHistory } from '../services/productAnalyticsService';
+import { normalizeProduct } from '../services/productService';
 
 interface PriceHistoryChartProps {
   product: Product;
 }
 
-export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({ product }) => {
+export const PriceHistoryChart: React.FC<PriceHistoryChartProps> = ({ product: rawProduct }) => {
+  const product = normalizeProduct(rawProduct);
   const [historyData, setHistoryData] = useState<PriceHistoryPoint[]>([]);
   const [selectedRange, setSelectedRange] = useState<'30d' | '90d' | 'all'>('all');
 

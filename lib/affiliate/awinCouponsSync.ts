@@ -607,7 +607,7 @@ export async function syncAwinCoupons(supabaseClient?: any): Promise<CouponSyncR
     try {
       const { data: allDbCoupons } = await supabase
         .from('coupons')
-        .select('id, store_id, code, created_at')
+        .select('*')
         .order('created_at', { ascending: false });
 
       if (allDbCoupons && allDbCoupons.length > 0) {
@@ -616,7 +616,8 @@ export async function syncAwinCoupons(supabaseClient?: any): Promise<CouponSyncR
 
         for (const row of allDbCoupons) {
           if (!row.code) continue;
-          const key = `${(row.store_id || 'aliexpress').toLowerCase()}:${row.code.trim().toUpperCase()}`;
+          const storeKey = (row.store_id || row.store_name || 'aliexpress').toLowerCase();
+          const key = `${storeKey}:${row.code.trim().toUpperCase()}`;
           if (seenCodeMap.has(key)) {
             idsToDelete.push(row.id);
           } else {
@@ -626,25 +627,40 @@ export async function syncAwinCoupons(supabaseClient?: any): Promise<CouponSyncR
 
         if (idsToDelete.length > 0) {
           console.log(`[AWIN COUPONS] Removendo ${idsToDelete.length} registros com códigos duplicados no Supabase...`);
-          await supabase.from('coupons').delete().in('id', idsToDelete);
+          for (let i = 0; i < idsToDelete.length; i += 50) {
+            const batch = idsToDelete.slice(i, i + 50);
+            await supabase.from('coupons').delete().in('id', batch);
+          }
         }
       }
     } catch (dupErr: any) {
       console.warn('[AWIN COUPONS] Aviso ao limpar duplicatas legadas:', dupErr.message);
     }
 
-    // 6. Inativação de cupons expirados
+    // 6. Inativação de cupons expirados (resiliente a qualquer schema)
     try {
-      const nowIso = new Date().toISOString();
-      await supabase
-        .from('coupons')
-        .update({ is_active: false, updated_at: nowIso })
-        .lt('ends_at', nowIso);
+      const now = new Date();
+      const { data: allCoupons } = await supabase.from('coupons').select('*');
+      if (allCoupons && allCoupons.length > 0) {
+        const expiredIds = allCoupons
+          .filter((c: any) => {
+            const exp = c.ends_at || c.valid_until || c.expires_at || c.end_date;
+            return Boolean(exp && new Date(exp) < now && c.is_active !== false);
+          })
+          .map((c: any) => c.id);
 
-      await supabase
-        .from('coupons')
-        .update({ is_active: false, updated_at: nowIso })
-        .lt('valid_until', nowIso);
+        if (expiredIds.length > 0) {
+          const nowIso = now.toISOString();
+          for (let i = 0; i < expiredIds.length; i += 50) {
+            const batch = expiredIds.slice(i, i + 50);
+            await supabase
+              .from('coupons')
+              .update({ is_active: false, updated_at: nowIso })
+              .in('id', batch);
+          }
+          console.log(`[AWIN COUPONS] ${expiredIds.length} cupons expirados foram inativados no Supabase.`);
+        }
+      }
     } catch (cleanErr: any) {
       console.warn('[AWIN COUPONS] Aviso na rotina de inativação de expirados:', cleanErr.message);
     }
