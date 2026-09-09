@@ -78,9 +78,18 @@ export const ALLOWED_ADMIN_EMAILS = [
   'chaveofertas0@gmail.com'
 ];
 
-const getRemainingTimeUI = (endsAt?: string) => {
-  if (!endsAt) return null;
-  const diffMs = new Date(endsAt).getTime() - Date.now();
+const getRemainingTimeUI = (endsAt?: string, createdAt?: string) => {
+  let targetTime: number;
+
+  if (endsAt) {
+    targetTime = new Date(endsAt).getTime();
+  } else if (createdAt) {
+    targetTime = new Date(createdAt).getTime() + (10 * 24 * 60 * 60 * 1000);
+  } else {
+    return null;
+  }
+
+  const diffMs = targetTime - Date.now();
   if (diffMs <= 0) return null;
 
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
@@ -2461,7 +2470,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                   <span>{offersCount} {offersCount === 1 ? 'Loja' : 'Lojas'}</span>
                                 </span>
                                 {(() => {
-                                  const timeUI = getRemainingTimeUI(prod.endsAt);
+                                  const timeUI = getRemainingTimeUI(prod.endsAt, prod.createdAt);
                                   if (!timeUI) return null;
                                   return (
                                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[9px] font-bold ${timeUI.colorClass}`}>
