@@ -62,6 +62,7 @@ import {
   Percent, 
   FileEdit, 
   Search, 
+  Clock,
   Store as StoreIcon, 
   Plus, 
   X, 
@@ -76,6 +77,26 @@ export const ALLOWED_ADMIN_EMAILS = [
   'murilobozolans@gmail.com',
   'chaveofertas0@gmail.com'
 ];
+
+const getRemainingTimeUI = (endsAt?: string) => {
+  if (!endsAt) return null;
+  const diffMs = new Date(endsAt).getTime() - Date.now();
+  if (diffMs <= 0) return null;
+
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+
+  let colorClass = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+  if (diffDays < 3 && diffHours > 24) {
+    colorClass = 'bg-amber-500/10 text-amber-400 border-amber-500/20';
+  } else if (diffHours <= 24) {
+    colorClass = 'bg-rose-500/10 text-rose-400 border-rose-500/20';
+  }
+
+  const text = diffDays > 0 ? `Faltam ${diffDays} ${diffDays === 1 ? 'dia' : 'dias'}` : `Faltam ${diffHours} ${diffHours === 1 ? 'hora' : 'horas'}`;
+
+  return { text, colorClass };
+};
 
 const POPULAR_STORES = [
   { id: 'mercadolivre', name: 'Mercado Livre', color: '#FFE600' },
@@ -2434,10 +2455,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                             {/* Status */}
                             <td className="py-4 px-4 text-center whitespace-nowrap">
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 text-[10px] font-black">
-                                <CheckCheck className="w-3 h-3" />
-                                <span>{offersCount} {offersCount === 1 ? 'Loja' : 'Lojas'}</span>
-                              </span>
+                              <div className="flex flex-col items-center gap-1.5">
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 text-[10px] font-black">
+                                  <CheckCheck className="w-3 h-3" />
+                                  <span>{offersCount} {offersCount === 1 ? 'Loja' : 'Lojas'}</span>
+                                </span>
+                                {(() => {
+                                  const timeUI = getRemainingTimeUI(prod.endsAt);
+                                  if (!timeUI) return null;
+                                  return (
+                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[9px] font-bold ${timeUI.colorClass}`}>
+                                      <Clock className="w-2.5 h-2.5" />
+                                      <span>{timeUI.text}</span>
+                                    </span>
+                                  );
+                                })()}
+                              </div>
                             </td>
 
                             {/* Action Buttons: Add Store, Edit, Remove */}
