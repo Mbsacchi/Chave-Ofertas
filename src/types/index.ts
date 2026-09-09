@@ -69,6 +69,7 @@ export interface Product {
   clickCount?: number;
   isVerified: boolean;
   isActive: boolean;
+  endsAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -193,6 +194,7 @@ export interface DraftProduct {
   freeShipping: boolean;
   installment: string;
   status: 'draft' | 'published';
+  endsAt?: string;
   createdAt: string;
   updatedAt: string;
 }

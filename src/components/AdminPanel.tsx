@@ -18,7 +18,8 @@ import {
   fetchAllGlobalProducts,
   syncAwinOffers,
   syncAliExpressOffers,
-  syncAwinCouponsOffers
+  syncAwinCouponsOffers,
+  deleteExpiredProducts
 } from '../services/adminService';
 import { 
   fetchAllAdminCoupons, 
@@ -52,6 +53,7 @@ import {
   Ticket,
   Scissors,
   Calendar,
+  History,
   DollarSign, 
   Link as LinkIcon, 
   Truck, 
@@ -101,12 +103,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Active view tab in admin
-  const [activeTab, setActiveTab] = useState<'create' | 'staging' | 'published' | 'coupons' | 'sql'>('create');
+  const [activeTab, setActiveTab] = useState<'create' | 'staging' | 'published' | 'expired' | 'coupons' | 'sql'>('create');
 
   // Staging Drafts & Published state
   const [drafts, setDrafts] = useState<DraftProduct[]>([]);
   const [draftsLoading, setDraftsLoading] = useState(false);
   const [publishedProducts, setPublishedProducts] = useState<Product[]>([]);
+
+  const { activePublishedProducts, expiredProducts } = useMemo(() => {
+    const now = Date.now();
+    const active: Product[] = [];
+    const expired: Product[] = [];
+    publishedProducts.forEach(p => {
+      if (p.endsAt && new Date(p.endsAt).getTime() <= now) {
+        expired.push(p);
+      } else {
+        active.push(p);
+      }
+    });
+    return { activePublishedProducts: active, expiredProducts: expired };
+  }, [publishedProducts]);
 
   // Coupons State
   const [adminCoupons, setAdminCoupons] = useState<Coupon[]>([]);
@@ -161,6 +177,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [manualAffiliateUrl, setManualAffiliateUrl] = useState('');
   const [manualCategoryId, setManualCategoryId] = useState(CATEGORIES_TREE[0]?.id || 'eletronicos');
   const [manualFreeShipping, setManualFreeShipping] = useState(true);
+  const [manualEndsAt, setManualEndsAt] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSyncingAwin, setIsSyncingAwin] = useState(false);
   const [isSyncingAliExpress, setIsSyncingAliExpress] = useState(false);
@@ -571,6 +588,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setManualPrice('');
     setManualAffiliateUrl('');
     setManualFreeShipping(true);
+    setManualEndsAt('');
     showFeedback('success', `Loja "${newStoreName}" selecionada. Preencha os campos para cadastrá-la.`);
   };
 
@@ -640,6 +658,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setManualImageUrl('');
     setManualAffiliateUrl('');
     setManualFreeShipping(true);
+    setManualEndsAt('');
     setDraftStoreOffers({});
   };
 
@@ -702,6 +721,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           subcategoryId: defaultSubcategory?.id,
           subcategoryName: defaultSubcategory?.name,
           freeShipping: manualFreeShipping,
+          endsAt: manualEndsAt ? new Date(manualEndsAt).toISOString() : undefined,
         });
 
         setPublishedProducts(prev => prev.map(p => (p.id === editingProductId ? updated : p)));
@@ -752,6 +772,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           storeName: manualStoreName.trim(),
           freeShipping: manualFreeShipping,
           installment: '10x sem juros',
+          endsAt: manualEndsAt ? new Date(manualEndsAt).toISOString() : undefined,
         });
 
         setDrafts(prev => [newDraft, ...prev]);
@@ -840,6 +861,36 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setManualFreeShipping(true);
     setActiveTab('create');
     showFeedback('success', `Pronto para adicionar oferta da loja "${nextStore}" ao produto "${product.title.slice(0, 25)}...".`);
+  };
+
+  // Handle Expired Products Actions
+  const handleClearExpiredProducts = async () => {
+    if (!window.confirm('Tem certeza que deseja limpar TODAS as ofertas expiradas? Esta ação não pode ser desfeita.')) {
+      return;
+    }
+    try {
+      await deleteExpiredProducts();
+      setPublishedProducts(prev => {
+        const now = Date.now();
+        return prev.filter(p => !p.endsAt || new Date(p.endsAt).getTime() > now);
+      });
+      showFeedback('success', 'Ofertas expiradas removidas com sucesso.');
+    } catch (err: any) {
+      showFeedback('error', err.message || 'Erro ao limpar ofertas expiradas.');
+    }
+  };
+
+  const handleRenewExpiredProduct = async (product: Product) => {
+    const newEndsAt = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    try {
+      const updated = await updatePublishedProduct(product.id, {
+        endsAt: newEndsAt
+      });
+      setPublishedProducts(prev => prev.map(p => (p.id === product.id ? updated : p)));
+      showFeedback('success', 'Validade da oferta renovada por mais 10 dias.');
+    } catch (err: any) {
+      showFeedback('error', err.message || 'Erro ao renovar validade da oferta.');
+    }
   };
 
   // Delete Published Product Entirely
@@ -935,13 +986,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // 4. FILTROS E ORDENAÇÃO NA TABELA (Vitrine Publicada)
   const uniqueCategories = useMemo(() => {
     return Array.from(
-      new Set(publishedProducts.map((p) => p.categoryName || 'Geral'))
+      new Set(activePublishedProducts.map((p) => p.categoryName || 'Geral'))
     ).filter(Boolean).sort();
-  }, [publishedProducts]);
+  }, [activePublishedProducts]);
 
   const uniqueStores = useMemo(() => {
     const storesSet = new Set<string>();
-    publishedProducts.forEach((p) => {
+    activePublishedProducts.forEach((p) => {
       if (p.offers && p.offers.length > 0) {
         p.offers.forEach((o) => storesSet.add(o.storeName));
       } else if (p.bestStore) {
@@ -949,10 +1000,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       }
     });
     return Array.from(storesSet).filter(Boolean).sort();
-  }, [publishedProducts]);
+  }, [activePublishedProducts]);
 
   const displayedPublishedProducts = useMemo(() => {
-    return publishedProducts
+    return activePublishedProducts
       .filter((p) => {
         // 1. Filtrar por Categoria
         if (tableCategoryFilter !== 'all' && (p.categoryName || 'Geral') !== tableCategoryFilter) {
@@ -998,7 +1049,45 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             return 0;
         }
       });
-  }, [publishedProducts, tableCategoryFilter, tableStoreFilter, tableSortBy, tableSearchQuery]);
+  }, [activePublishedProducts, tableCategoryFilter, tableStoreFilter, tableSortBy, tableSearchQuery]);
+
+  const displayedExpiredProducts = useMemo(() => {
+    return expiredProducts
+      .filter((p) => {
+        // 1. Filtrar por Categoria
+        if (tableCategoryFilter !== 'all' && (p.categoryName || 'Geral') !== tableCategoryFilter) {
+          return false;
+        }
+        // 2. Filtrar por Loja
+        if (tableStoreFilter !== 'all') {
+          const hasStore = p.offers?.some(
+            (o) => o.storeName.toLowerCase() === tableStoreFilter.toLowerCase()
+          ) || p.bestStore?.toLowerCase() === tableStoreFilter.toLowerCase();
+          if (!hasStore) return false;
+        }
+        // 3. Filtrar por Busca de Texto
+        if (tableSearchQuery.trim()) {
+          const q = tableSearchQuery.toLowerCase().trim();
+          const matchesTitle = p.title.toLowerCase().includes(q);
+          const matchesBrand = p.brand?.toLowerCase().includes(q);
+          const matchesSku = p.sku?.toLowerCase().includes(q);
+          const matchesStore = p.offers?.some(o => o.storeName.toLowerCase().includes(q)) || p.bestStore?.toLowerCase().includes(q);
+          if (!matchesTitle && !matchesBrand && !matchesSku && !matchesStore) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const minPriceA = a.offers && a.offers.length > 0 ? Math.min(...a.offers.map((o) => o.price)) : a.minPrice;
+        const minPriceB = b.offers && b.offers.length > 0 ? Math.min(...b.offers.map((o) => o.price)) : b.minPrice;
+        switch (tableSortBy) {
+          case 'name-asc': return a.title.localeCompare(b.title, 'pt-BR');
+          case 'name-desc': return b.title.localeCompare(a.title, 'pt-BR');
+          case 'price-asc': return minPriceA - minPriceB;
+          case 'price-desc': return minPriceB - minPriceA;
+          default: return 0;
+        }
+      });
+  }, [expiredProducts, tableCategoryFilter, tableStoreFilter, tableSortBy, tableSearchQuery]);
 
   // Loading indicator
   if (authLoading) {
@@ -1282,7 +1371,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <ShoppingBag className="w-4 h-4" />
             <span>Vitrine Publicada</span>
             <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-950 text-emerald-400">
-              {publishedProducts.length}
+              {activePublishedProducts.length}
+            </span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveTab('expired');
+              loadDraftsAndProducts();
+            }}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'expired'
+                ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-400/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <History className="w-4 h-4" />
+            <span>Ofertas Expiradas</span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-950 text-rose-400">
+              {expiredProducts.length}
             </span>
           </button>
 
@@ -1721,6 +1828,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         <span>Destacar Frete Grátis nesta Loja</span>
                       </div>
                     </label>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 pt-1">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-amber-400" />
+                      Validade da Oferta (Opcional)
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={manualEndsAt ? new Date(new Date(manualEndsAt).getTime() - new Date(manualEndsAt).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setManualEndsAt(val ? new Date(val).toISOString() : '');
+                      }}
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1.5 ml-1">
+                      Se não preenchido, a oferta expira automaticamente em 10 dias.
+                    </p>
                   </div>
                 </div>
 
@@ -2340,6 +2468,101 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                   <span>Remover</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB EXPIRED PRODUCTS */}
+        {activeTab === 'expired' && (
+          <div className="space-y-6 animate-in fade-in duration-150">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 rounded-3xl bg-slate-900 border border-slate-800">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="p-1.5 rounded-lg bg-rose-400/10 text-rose-400 border border-rose-400/20">
+                    <History className="w-4 h-4" />
+                  </div>
+                  <h3 className="text-lg font-black text-white tracking-tight">Ofertas Expiradas</h3>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Estas ofertas passaram do tempo de vida (TTL) e não estão visíveis na vitrine.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                <button
+                  onClick={handleClearExpiredProducts}
+                  className="px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded-xl text-xs font-bold transition-all flex items-center gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Limpar Todas as Expiradas
+                </button>
+              </div>
+            </div>
+
+            {displayedExpiredProducts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center p-12 bg-slate-900/50 rounded-3xl border border-slate-800/50 border-dashed text-slate-400">
+                <CheckCircle2 className="w-12 h-12 mb-3 text-slate-600" />
+                <p className="text-sm font-bold text-slate-300">Nenhuma oferta expirada</p>
+                <p className="text-xs mt-1">A vitrine está limpa.</p>
+              </div>
+            ) : (
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-950/50 border-b border-slate-800">
+                        <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-wider min-w-[200px]">Produto / Oferta</th>
+                        <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/50">
+                      {displayedExpiredProducts.map((prod) => {
+                        return (
+                          <tr key={prod.id} className="hover:bg-slate-800/20 transition-colors">
+                            <td className="p-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-12 h-12 rounded-xl bg-slate-800 p-2 shrink-0 border border-slate-700 flex items-center justify-center">
+                                  <img 
+                                    src={prod.imageUrl || 'https://via.placeholder.com/150'} 
+                                    alt={prod.title} 
+                                    className="max-w-full max-h-full object-contain mix-blend-multiply"
+                                    loading="lazy"
+                                  />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-bold text-slate-200 line-clamp-1">{prod.title}</p>
+                                  <p className="text-xs text-rose-400 font-mono mt-1">
+                                    Expirou em: {prod.endsAt ? new Date(prod.endsAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A'}
+                                  </p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="p-4">
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => handleRenewExpiredProduct(prod)}
+                                  className="p-2 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-lg transition-colors flex items-center gap-1.5 font-bold text-xs"
+                                  title="Renovar por mais 10 dias"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                  <span>Renovar</span>
+                                </button>
+                                <button
+                                  onClick={() => handleDeletePublishedProduct(prod.id)}
+                                  className="p-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded-lg transition-colors"
+                                  title="Excluir Produto"
+                                >
+                                  <Trash2 className="w-4 h-4" />
                                 </button>
                               </div>
                             </td>

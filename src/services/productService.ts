@@ -175,6 +175,7 @@ export function normalizeProduct(raw: any): Product {
     clickCount: Number(raw.clickCount ?? raw.click_count ?? 0) || 0,
     isVerified: Boolean(raw.isVerified ?? raw.is_verified ?? true),
     isActive: Boolean(raw.isActive ?? raw.is_active ?? true),
+    endsAt: raw.endsAt || raw.ends_at || undefined,
     createdAt: String(raw.createdAt || raw.created_at || new Date().toISOString()),
     updatedAt: String(raw.updatedAt || raw.updated_at || new Date().toISOString()),
   };

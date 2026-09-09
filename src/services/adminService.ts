@@ -102,6 +102,7 @@ export const fetchDraftProducts = async (): Promise<DraftProduct[]> => {
           freeShipping: Boolean(d.free_shipping),
           installment: d.installment || 'À vista',
           status: d.status || 'draft',
+          endsAt: d.ends_at || undefined,
           createdAt: d.created_at,
           updatedAt: d.updated_at,
         }));
@@ -126,6 +127,7 @@ export const addDraftProduct = async (
     ...draft,
     id: `draft-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     status: 'draft',
+    endsAt: draft.endsAt || new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -154,6 +156,7 @@ export const addDraftProduct = async (
           free_shipping: newDraft.freeShipping,
           installment: newDraft.installment,
           status: 'draft',
+          ends_at: newDraft.endsAt,
         })
         .select()
         .single();
@@ -179,6 +182,7 @@ export const addDraftProduct = async (
           freeShipping: Boolean(data.free_shipping),
           installment: data.installment,
           status: 'draft',
+          endsAt: data.ends_at || undefined,
           createdAt: data.created_at,
           updatedAt: data.updated_at,
         };
@@ -222,6 +226,7 @@ export const updateDraftProduct = async (
       if (updates.freeShipping !== undefined) payload.free_shipping = updates.freeShipping;
       if (updates.installment !== undefined) payload.installment = updates.installment;
       if (updates.status !== undefined) payload.status = updates.status;
+      if (updates.endsAt !== undefined) payload.ends_at = updates.endsAt;
 
       const { data, error } = await supabase
         .from('draft_products')
@@ -251,6 +256,7 @@ export const updateDraftProduct = async (
           freeShipping: Boolean(data.free_shipping),
           installment: data.installment,
           status: data.status,
+          endsAt: data.ends_at || undefined,
           createdAt: data.created_at,
           updatedAt: data.updated_at,
         };
@@ -352,6 +358,7 @@ export const publishDraftToVitrine = async (draft: DraftProduct): Promise<Produc
     reviewsCount: 120,
     isVerified: true,
     isActive: true,
+    endsAt: draft.endsAt,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     offers: [primaryOffer],
@@ -382,6 +389,7 @@ export const publishDraftToVitrine = async (draft: DraftProduct): Promise<Produc
         reviews_count: newProduct.reviewsCount,
         is_verified: newProduct.isVerified,
         is_active: true,
+        ends_at: newProduct.endsAt,
         offers: newProduct.offers,
         price_history: newProduct.priceHistory,
       });
@@ -418,6 +426,7 @@ export interface CreateManualProductInput {
   subcategoryId?: string;
   subcategoryName?: string;
   freeShipping: boolean;
+  endsAt?: string;
 }
 
 /**
@@ -484,6 +493,7 @@ export const createAndPublishManualProduct = async (
     reviewsCount: 150,
     isVerified: true,
     isActive: true,
+    endsAt: input.endsAt || new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     offers: [primaryOffer],
@@ -514,6 +524,7 @@ export const createAndPublishManualProduct = async (
         reviews_count: newProduct.reviewsCount,
         is_verified: newProduct.isVerified,
         is_active: true,
+        ends_at: newProduct.endsAt,
         offers: newProduct.offers,
         price_history: newProduct.priceHistory,
       });
@@ -569,6 +580,7 @@ export const fetchAllGlobalProducts = async (): Promise<Product[]> => {
           clickCount: Number(p.click_count) || 0,
           isVerified: Boolean(p.is_verified),
           isActive: p.is_active !== undefined ? Boolean(p.is_active) : true,
+          endsAt: p.ends_at || undefined,
           createdAt: p.created_at,
           updatedAt: p.updated_at,
           offers: p.offers || [],
@@ -609,7 +621,10 @@ export const fetchAllGlobalProducts = async (): Promise<Product[]> => {
  * Fetches all custom published products from Supabase/Storage
  */
 export const fetchLiveDatabaseProducts = async (): Promise<Product[]> => {
-  return fetchAllGlobalProducts();
+  const allProducts = await fetchAllGlobalProducts();
+  const now = Date.now();
+  // Filtra fora produtos que estão vencidos
+  return allProducts.filter(p => !p.endsAt || new Date(p.endsAt).getTime() > now);
 };
 
 /**
@@ -634,6 +649,37 @@ export const deletePublishedProduct = async (productId: string): Promise<void> =
 
   const custom = getStoredCustomProducts();
   saveStoredCustomProducts(custom.filter((p) => p.id !== productId));
+};
+
+/**
+ * Deletes all published products that have expired
+ */
+export const deleteExpiredProducts = async (): Promise<void> => {
+  await requireAuthSession();
+  const allProducts = await fetchAllGlobalProducts();
+  const now = Date.now();
+  const expiredIds = allProducts
+    .filter(p => p.endsAt && new Date(p.endsAt).getTime() <= now)
+    .map(p => p.id);
+
+  if (expiredIds.length === 0) return;
+
+  if (isSupabaseConfigured) {
+    try {
+      const { error } = await supabase
+        .from('products')
+        .delete()
+        .in('id', expiredIds);
+      if (error) {
+        console.warn('Supabase delete expired error:', error);
+      }
+    } catch (err) {
+      console.warn('Supabase deleteExpiredProducts error:', err);
+    }
+  }
+
+  const custom = getStoredCustomProducts();
+  saveStoredCustomProducts(custom.filter((p) => !expiredIds.includes(p.id)));
 };
 
 /**
@@ -727,6 +773,7 @@ export const updatePublishedProduct = async (
     bestStoreId: bestOffer.storeId,
     minPrice: lowestPrice,
     maxPrice: highestPrice,
+    endsAt: updates.endsAt !== undefined ? updates.endsAt : targetProduct.endsAt,
     offers: updatedOffers,
     updatedAt: new Date().toISOString(),
   };
@@ -746,6 +793,7 @@ export const updatePublishedProduct = async (
           best_store_id: updatedProduct.bestStoreId,
           min_price: updatedProduct.minPrice,
           max_price: updatedProduct.maxPrice,
+          ends_at: updatedProduct.endsAt,
           offers: updatedProduct.offers,
           updated_at: updatedProduct.updatedAt,
         })
