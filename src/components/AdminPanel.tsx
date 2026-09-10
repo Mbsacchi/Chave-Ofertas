@@ -715,6 +715,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
     const finalDiscountPercent = calcDiscountPercent(finalOriginalPrice, currentParsedPrice) || 15;
 
+    let finalEndsAt: string | undefined = undefined;
+    if (manualEndsAt.trim() !== '') {
+      const days = parseInt(manualEndsAt, 10);
+      if (!isNaN(days) && days > 0) {
+        finalEndsAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+      }
+    } else {
+      finalEndsAt = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    }
+
     setIsSubmitting(true);
     try {
       // CENÁRIO A: Adicionar ou Atualizar oferta em produto existente via Comparador
@@ -738,16 +748,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       else if (editingProductId) {
         const selectedCategory = CATEGORIES_TREE.find(c => c.id === manualCategoryId) || CATEGORIES_TREE[0];
         const defaultSubcategory = selectedCategory.subcategories[0];
-
-        let finalEndsAt: string | undefined = undefined;
-        if (manualEndsAt.trim() !== '') {
-          const days = parseInt(manualEndsAt, 10);
-          if (!isNaN(days) && days > 0) {
-            finalEndsAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
-          }
-        } else {
-          finalEndsAt = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
-        }
 
         const updated = await updatePublishedProduct(editingProductId, {
           title: manualTitle.trim(),
