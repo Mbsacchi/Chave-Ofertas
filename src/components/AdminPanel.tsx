@@ -739,6 +739,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         const selectedCategory = CATEGORIES_TREE.find(c => c.id === manualCategoryId) || CATEGORIES_TREE[0];
         const defaultSubcategory = selectedCategory.subcategories[0];
 
+        let finalEndsAt: string | undefined = undefined;
+        if (manualEndsAt.trim() !== '') {
+          const days = parseInt(manualEndsAt, 10);
+          if (!isNaN(days) && days > 0) {
+            finalEndsAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+          }
+        } else {
+          finalEndsAt = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+        }
+
         const updated = await updatePublishedProduct(editingProductId, {
           title: manualTitle.trim(),
           price: currentParsedPrice,
@@ -751,7 +761,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           subcategoryId: defaultSubcategory?.id,
           subcategoryName: defaultSubcategory?.name,
           freeShipping: manualFreeShipping,
-          endsAt: manualEndsAt ? new Date(manualEndsAt).toISOString() : undefined,
+          endsAt: finalEndsAt,
         });
 
         setPublishedProducts(prev => prev.map(p => (p.id === editingProductId ? updated : p)));
@@ -802,7 +812,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           storeName: manualStoreName.trim(),
           freeShipping: manualFreeShipping,
           installment: '10x sem juros',
-          endsAt: manualEndsAt ? new Date(manualEndsAt).toISOString() : undefined,
+          endsAt: finalEndsAt,
         });
 
         setDrafts(prev => [newDraft, ...prev]);
@@ -869,6 +879,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setManualAffiliateUrl(primaryOffer?.affiliateUrl || '');
     setManualCategoryId(product.categoryId);
     setManualFreeShipping(primaryOffer?.freeShipping ?? true);
+    
+    if (product.endsAt) {
+      const msDiff = new Date(product.endsAt).getTime() - Date.now();
+      const days = Math.ceil(msDiff / (1000 * 60 * 60 * 24));
+      setManualEndsAt(days > 0 ? days.toString() : '0');
+    } else {
+      setManualEndsAt('');
+    }
 
     setActiveTab('create');
     showFeedback('success', `Carregando "${product.title.slice(0, 25)}..." para edição no formulário.`);
@@ -1865,15 +1883,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <div>
                     <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
                       <Calendar className="w-3.5 h-3.5 text-amber-400" />
-                      Validade da Oferta (Opcional)
+                      Dias de Validade (Opcional)
                     </label>
                     <input
-                      type="datetime-local"
-                      value={manualEndsAt ? new Date(new Date(manualEndsAt).getTime() - new Date(manualEndsAt).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setManualEndsAt(val ? new Date(val).toISOString() : '');
-                      }}
+                      type="number"
+                      min="1"
+                      placeholder="Ex: 10"
+                      value={manualEndsAt}
+                      onChange={(e) => setManualEndsAt(e.target.value)}
                       className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors"
                     />
                     <p className="text-[10px] text-slate-500 mt-1.5 ml-1">

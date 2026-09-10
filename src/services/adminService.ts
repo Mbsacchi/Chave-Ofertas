@@ -74,6 +74,8 @@ const requireAuthSession = async (): Promise<string> => {
 export const fetchDraftProducts = async (): Promise<DraftProduct[]> => {
   await requireAuthSession();
   
+  let dbDrafts: DraftProduct[] = [];
+
   if (isSupabaseConfigured) {
     try {
       const { data, error } = await supabase
@@ -82,7 +84,7 @@ export const fetchDraftProducts = async (): Promise<DraftProduct[]> => {
         .order('created_at', { ascending: false });
         
       if (!error && data) {
-        return data.map((d: any) => ({
+        dbDrafts = data.map((d: any) => ({
           id: d.id,
           externalId: d.external_id,
           title: d.title,
@@ -112,7 +114,20 @@ export const fetchDraftProducts = async (): Promise<DraftProduct[]> => {
     }
   }
 
-  return getStoredDrafts();
+  const localDrafts = getStoredDrafts();
+  const combinedMap = new Map<string, DraftProduct>();
+  
+  // Combine, preferring DB versions if IDs match
+  dbDrafts.forEach(d => combinedMap.set(d.id, d));
+  localDrafts.forEach(d => {
+    if (!combinedMap.has(d.id)) {
+      combinedMap.set(d.id, d);
+    }
+  });
+
+  return Array.from(combinedMap.values()).sort((a, b) => 
+    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
 };
 
 /**
