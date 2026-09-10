@@ -10,6 +10,7 @@ import { PriceComparisonModal } from './components/PriceComparisonModal';
 import { PriceAlertModal } from './components/PriceAlertModal';
 import { AuthModal } from './components/AuthModal';
 import { AdSensePlaceholder } from './components/AdSensePlaceholder';
+import { AdSenseBanner } from './components/AdSenseBanner';
 import { SeoFooterContent } from './components/SeoFooterContent';
 import { Footer } from './components/Footer';
 import { SortDropdown } from './components/SortDropdown';
@@ -716,7 +717,7 @@ export const AppContent: React.FC = () => {
                               {/* Insert full-width in-feed banner dynamically every 4 products */}
                               {(index + 1) % 4 === 0 && (
                                 <div className="col-span-full w-full my-2">
-                                  <AdSensePlaceholder slotType="infeed" />
+                                  <AdSenseBanner />
                                 </div>
                               )}
                             </React.Fragment>
