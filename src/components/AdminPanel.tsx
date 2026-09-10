@@ -218,10 +218,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [tableStoreFilter, setTableStoreFilter] = useState('all');
   const [tableSortBy, setTableSortBy] = useState<'name-asc' | 'name-desc' | 'price-asc' | 'price-desc'>('name-asc');
 
-  // Cache de rascunhos de ofertas por loja no formulário atual
-  const [draftStoreOffers, setDraftStoreOffers] = useState<
-    Record<string, { price: string; originalPrice: string; affiliateUrl: string; freeShipping: boolean }>
-  >({});
+  // Added Offers for the current product
+  interface OfferDraft {
+    storeName: string;
+    originalPrice: string;
+    price: string;
+    affiliateUrl: string;
+    freeShipping: boolean;
+  }
+  const [addedOffers, setAddedOffers] = useState<OfferDraft[]>([]);
 
   // Action status feedbacks
   const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -569,18 +574,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // 1. ISOLAMENTO DE OFERTAS: Troca de loja no formulário com reset e preservação segura de dados
   const handleStoreSelect = (newStoreName: string) => {
-    // 1.1. Salva o rascunho temporário da loja atual se houver preço ou link digitados
-    if (manualStoreName.trim()) {
-      const currentKey = manualStoreName.trim().toLowerCase();
-      setDraftStoreOffers((prev) => ({
-        ...prev,
-        [currentKey]: {
-          price: manualPrice,
-          originalPrice: manualOriginalPrice,
-          affiliateUrl: manualAffiliateUrl,
-          freeShipping: manualFreeShipping,
-        },
-      }));
+    // Reset suggestions if typing new
+    if (newStoreName.toLowerCase() !== manualStoreName.toLowerCase()) {
+      setSuggestions([]);
     }
 
     setManualStoreName(newStoreName);
@@ -602,14 +598,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       }
     }
 
-    // 1.3. Se o usuário já digitou valores para essa loja neste formulário antes de trocar, restaura os dados
-    if (draftStoreOffers[targetKey]) {
-      const draft = draftStoreOffers[targetKey];
-      setManualOriginalPrice(draft.originalPrice);
-      setManualPrice(draft.price);
-      setManualAffiliateUrl(draft.affiliateUrl);
-      setManualFreeShipping(draft.freeShipping);
-      showFeedback('success', `Restaurando dados inseridos para "${newStoreName}".`);
+    // 1.3. Se o usuário já adicionou esta loja ao array de ofertas deste form, restaura os dados para edição
+    const existingAddedOffer = addedOffers.find(o => o.storeName.toLowerCase() === targetKey);
+    if (existingAddedOffer) {
+      setManualOriginalPrice(existingAddedOffer.originalPrice);
+      setManualPrice(existingAddedOffer.price);
+      setManualAffiliateUrl(existingAddedOffer.affiliateUrl);
+      setManualFreeShipping(existingAddedOffer.freeShipping);
+      showFeedback('success', `Editando dados da oferta já adicionada: "${newStoreName}".`);
       return;
     }
 
@@ -689,7 +685,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setManualAffiliateUrl('');
     setManualFreeShipping(true);
     setManualEndsAt('');
-    setDraftStoreOffers({});
+    setAddedOffers([]);
   };
 
   // Submit Form: Add Offer to Existing Product OR Save New Draft OR Update Published Product
@@ -724,6 +720,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     } else {
       finalEndsAt = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
     }
+
+    // Prepara todas as ofertas para submissão (a oferta atualmente na tela + as adicionadas no array)
+    const currentStoreOffer = {
+      storeName: manualStoreName.trim(),
+      price: currentParsedPrice,
+      originalPrice: finalOriginalPrice,
+      discountPercent: finalDiscountPercent,
+      affiliateUrl: manualAffiliateUrl.trim(),
+      freeShipping: manualFreeShipping,
+      storeId: 'mercadolivre' as StoreId, // Resolvido dinamicamente abaixo
+    };
+    
+    // Mescla com as ofertas adicionadas (evita duplicar a oferta que já está na tela)
+    const finalOffers = addedOffers
+      .filter(o => o.storeName.toLowerCase() !== manualStoreName.toLowerCase().trim())
+      .map(o => {
+        const p = parseFloat(o.price.replace(/\./g, '').replace(',', '.'));
+        const op = o.originalPrice ? parseFloat(o.originalPrice.replace(/\./g, '').replace(',', '.')) : p;
+        const oFinal = op > p ? op : Math.round(p * 1.15);
+        return {
+          ...o,
+          price: p,
+          originalPrice: oFinal,
+          discountPercent: calcDiscountPercent(oFinal, p) || 15,
+          storeId: 'mercadolivre' as StoreId,
+        };
+      });
+    finalOffers.push(currentStoreOffer);
 
     setIsSubmitting(true);
     try {
@@ -786,38 +810,43 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         const selectedCategory = CATEGORIES_TREE.find(c => c.id === manualCategoryId) || CATEGORIES_TREE[0];
         const defaultSubcategory = selectedCategory.subcategories[0];
 
-        const rawStore = manualStoreName.toLowerCase().replace(/\s+/g, '');
-        let storeId: StoreId = 'mercadolivre';
-        if (rawStore.includes('amazon')) storeId = 'amazon';
-        else if (rawStore.includes('aliexpress') || rawStore.includes('ali')) storeId = 'aliexpress';
-        else if (rawStore.includes('shopee')) storeId = 'shopee';
-        else if (rawStore.includes('magalu') || rawStore.includes('magazine')) storeId = 'magalu';
-        else if (rawStore.includes('kabum')) storeId = 'kabum';
+        const newDrafts: DraftProduct[] = [];
+        
+        for (const offer of finalOffers) {
+          const rawStore = offer.storeName.toLowerCase().replace(/\s+/g, '');
+          let storeId: StoreId = 'mercadolivre';
+          if (rawStore.includes('amazon')) storeId = 'amazon';
+          else if (rawStore.includes('aliexpress') || rawStore.includes('ali')) storeId = 'aliexpress';
+          else if (rawStore.includes('shopee')) storeId = 'shopee';
+          else if (rawStore.includes('magalu') || rawStore.includes('magazine')) storeId = 'magalu';
+          else if (rawStore.includes('kabum')) storeId = 'kabum';
 
-        const newDraft = await addDraftProduct({
-          externalId: `manual-${Date.now()}`,
-          title: manualTitle.trim(),
-          brand: manualStoreName.trim(),
-          description: `${manualTitle.trim()} com garantia oficial e melhores condições na loja ${manualStoreName}.`,
-          categoryId: selectedCategory.id,
-          categoryName: selectedCategory.name,
-          subcategoryId: defaultSubcategory?.id,
-          subcategoryName: defaultSubcategory?.name,
-          imageUrl: manualImageUrl.trim(),
-          originalPrice: finalOriginalPrice,
-          promotionalPrice: currentParsedPrice,
-          discountPercent: finalDiscountPercent,
-          affiliateUrl: manualAffiliateUrl.trim(),
-          storeId,
-          storeName: manualStoreName.trim(),
-          freeShipping: manualFreeShipping,
-          installment: '10x sem juros',
-          endsAt: finalEndsAt,
-        });
+          const newDraft = await addDraftProduct({
+            externalId: `manual-${Date.now()}-${storeId}`,
+            title: manualTitle.trim(),
+            brand: offer.storeName.trim(),
+            description: `${manualTitle.trim()} com garantia oficial e melhores condições na loja ${offer.storeName}.`,
+            categoryId: selectedCategory.id,
+            categoryName: selectedCategory.name,
+            subcategoryId: defaultSubcategory?.id,
+            subcategoryName: defaultSubcategory?.name,
+            imageUrl: manualImageUrl.trim(),
+            originalPrice: offer.originalPrice,
+            promotionalPrice: offer.price,
+            discountPercent: offer.discountPercent,
+            affiliateUrl: offer.affiliateUrl.trim(),
+            storeId,
+            storeName: offer.storeName.trim(),
+            freeShipping: offer.freeShipping,
+            installment: '10x sem juros',
+            endsAt: finalEndsAt,
+          });
+          newDrafts.push(newDraft);
+        }
 
-        setDrafts(prev => [newDraft, ...prev]);
+        setDrafts(prev => [...newDrafts, ...prev]);
         handleClearForm();
-        showFeedback('success', `"${newDraft.title.slice(0, 30)}..." salvo na Fila de Rascunhos (status: draft)!`);
+        showFeedback('success', `"${newDrafts[0].title.slice(0, 30)}..." (${newDrafts.length} lojas) salvo na Fila de Rascunhos!`);
         setActiveTab('staging');
       }
 
@@ -862,6 +891,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleAddCurrentStoreToOffers = () => {
+    if (!manualPrice.trim() || !manualAffiliateUrl.trim()) {
+      showFeedback('error', 'Preencha o preço promocional e o link de afiliado para adicionar a loja à lista temporária.');
+      return;
+    }
+    
+    const newOffer = {
+      storeName: manualStoreName.trim(),
+      price: manualPrice,
+      originalPrice: manualOriginalPrice,
+      affiliateUrl: manualAffiliateUrl.trim(),
+      freeShipping: manualFreeShipping,
+    };
+
+    setAddedOffers(prev => {
+      const filtered = prev.filter(o => o.storeName.toLowerCase() !== newOffer.storeName.toLowerCase());
+      return [...filtered, newOffer];
+    });
+    
+    showFeedback('success', `Oferta da loja "${manualStoreName}" adicionada à lista!`);
+  };
+
+  const handleRemoveAddedOffer = (storeNameToRemove: string) => {
+    setAddedOffers(prev => prev.filter(o => o.storeName.toLowerCase() !== storeNameToRemove.toLowerCase()));
+    showFeedback('success', `Loja "${storeNameToRemove}" removida da lista.`);
   };
 
   // Start Editing Published Product
@@ -1900,26 +1956,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
 
                 {/* Action Buttons with Botão de Exclusão Individual de Loja */}
-                <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center gap-3">
+                <div className="pt-4 border-t border-slate-800 flex flex-col gap-3">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleAddCurrentStoreToOffers}
+                      className="px-5 py-3 rounded-2xl text-xs font-bold transition-all bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 flex-1 cursor-pointer"
+                    >
+                      + Adicionar esta Loja na Lista
+                    </button>
+                  </div>
+
                   <button
                     type="submit"
                     disabled={isSubmitting || (!activeProduct && !manualTitle) || !manualPrice || (!activeProduct && !manualImageUrl) || !manualAffiliateUrl}
-                    className={`flex-1 py-3.5 px-6 rounded-2xl font-black text-slate-950 active:scale-98 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-sm shadow-xl ${
-                      selectedExistingProduct
-                        ? 'bg-emerald-400 hover:bg-emerald-300 shadow-emerald-400/20'
+                    className={`w-full py-4 rounded-2xl font-black text-sm transition-all shadow-xl flex items-center justify-center gap-2 ${
+                      isSubmitting
+                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                        : selectedExistingProduct
+                        ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950 shadow-emerald-400/20'
                         : editingProductId
-                        ? 'bg-sky-400 hover:bg-sky-300 shadow-sky-400/20'
-                        : 'bg-amber-400 hover:bg-amber-300 shadow-amber-400/20'
+                        ? 'bg-sky-400 hover:bg-sky-300 text-slate-950 shadow-sky-400/20'
+                        : 'bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-amber-400/20 hover:-translate-y-0.5'
                     }`}
                   >
                     {isSubmitting ? (
-                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <div className="w-5 h-5 rounded-full border-2 border-slate-500 border-t-transparent animate-spin"></div>
                     ) : selectedExistingProduct ? (
                       <Plus className="w-4 h-4" />
                     ) : editingProductId ? (
                       <CheckCircle2 className="w-4 h-4" />
                     ) : (
-                      <Layers className="w-4 h-4" />
+                      <Save className="w-4 h-4" />
                     )}
                     <span>
                       {isSubmitting 
@@ -1928,9 +1996,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           ? `Salvar Oferta da ${manualStoreName} no Produto`
                           : editingProductId 
                             ? `Salvar Alterações da Loja ${manualStoreName}` 
-                            : 'Salvar Novo Produto como Rascunho'}
+                            : `Publicar ${addedOffers.length > 0 ? addedOffers.length + 1 : 1} Ofertas (Ir para Rascunhos)`}
                     </span>
                   </button>
+
+                  {/* Feedback Visual: Lista de Lojas Adicionadas */}
+                  {addedOffers.length > 0 && (
+                    <div className="mt-2 p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                      <h4 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-2">
+                        <StoreIcon className="w-3.5 h-3.5 text-amber-400" />
+                        Lojas Adicionadas Prontas para Publicar ({addedOffers.length})
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {addedOffers.map((offer, idx) => (
+                          <div key={idx} className="flex items-center gap-2 px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-[11px] text-slate-300">
+                            <span className="font-semibold text-amber-400">{offer.storeName}</span>
+                            <span className="text-slate-500">|</span>
+                            <span>R$ {offer.price}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                handleRemoveAddedOffer(offer.storeName);
+                              }}
+                              className="ml-1 w-4 h-4 flex items-center justify-center rounded-full bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-colors cursor-pointer"
+                              title="Remover"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* BOTÃO DE EXCLUSÃO INDIVIDUAL DE LOJAS */}
                   {activeProduct && currentStoreHasOffer && (
