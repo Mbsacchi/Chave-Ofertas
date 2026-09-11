@@ -68,7 +68,8 @@ import {
   X, 
   CheckCheck, 
   Filter, 
-  ArrowUpDown 
+  ArrowUpDown,
+  Save
 } from 'lucide-react';
 import { CATEGORIES_TREE } from '../data/mockData';
 
