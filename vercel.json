@@ -2,13 +2,24 @@
   "crons": [
     {
       "path": "/api/cron/sync-awin",
-      "schedule": "0 6 * * *"
+      "schedule": "0 3 * * *"
     },
     {
       "path": "/api/cron/sync-aliexpress-api",
-      "schedule": "0 7 * * *"
+      "schedule": "30 3 * * *"
     }
   ],
+  "functions": {
+    "api/awin-sync.ts": {
+      "maxDuration": 60
+    },
+    "api/cron/sync-awin.ts": {
+      "maxDuration": 60
+    },
+    "api/cron/sync-aliexpress-api.ts": {
+      "maxDuration": 60
+    }
+  },
   "headers": [
     {
       "source": "/(.*)",

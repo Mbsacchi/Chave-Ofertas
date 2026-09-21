@@ -1013,15 +1013,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  // Synchronize deals & coupons from Awin Affiliate Network
+  // Synchronize deals & coupons from KaBuM! (Awin Network)
   const handleSyncAwin = async () => {
     setIsSyncingAwin(true);
     try {
       const result = await syncAwinOffers();
-      showFeedback('success', result.message || `${result.count} ofertas da rede Awin sincronizadas com sucesso!`);
+      showFeedback('success', result.message || `${result.count} ofertas oficiais da KaBuM! sincronizadas com sucesso!`);
       await loadDraftsAndProducts();
     } catch (err: any) {
-      showFeedback('error', err.message || 'Erro ao sincronizar ofertas da Awin.');
+      showFeedback('error', err.message || 'Erro ao sincronizar ofertas da KaBuM!.');
     } finally {
       setIsSyncingAwin(false);
     }
@@ -1576,16 +1576,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     )}
                   </div>
 
-                  {/* BOTÃO DE SINCRONIZAÇÃO AWIN / KABUM */}
+                  {/* BOTÃO DE SINCRONIZAÇÃO KABUM (AWIN) */}
                   <button
                     type="button"
                     onClick={handleSyncAwin}
                     disabled={isSyncingAwin || isSyncingAliExpress}
-                    className="py-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition-all shadow-lg shadow-amber-400/20 active:scale-98 disabled:opacity-50 shrink-0 cursor-pointer"
-                    title="Sincronizar ofertas e cupons da rede de afiliados Awin"
+                    className="py-3.5 px-4 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-white font-black text-xs flex items-center justify-center gap-2 transition-all shadow-lg shadow-orange-500/20 active:scale-98 disabled:opacity-50 shrink-0 cursor-pointer"
+                    title="Sincronizar ofertas oficiais da KaBuM! via rede Awin"
                   >
                     <RefreshCw className={`w-4 h-4 ${isSyncingAwin ? 'animate-spin' : ''}`} />
-                    <span>{isSyncingAwin ? 'Sincronizando...' : 'Sincronizar Ofertas Awin'}</span>
+                    <span>{isSyncingAwin ? 'Sincronizando KaBuM!...' : 'Sincronizar KaBuM! (Awin)'}</span>
                   </button>
 
                   {/* BOTÃO DE SINCRONIZAÇÃO ALIEXPRESS (AWIN API) */}

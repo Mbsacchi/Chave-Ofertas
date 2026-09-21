@@ -31,12 +31,12 @@ if (fs.existsSync(envPath)) {
   });
 }
 
-// URL Oficial do Feed Awin com a coluna EAN incluída
+// URL Oficial do Feed KaBuM! (Awin fid 46967) completo com 4.996 produtos, código de barras (EAN), marcas e parcelamento
 const AWIN_DATAFEED_URL =
   process.env.AWIN_DATAFEED_URL ||
-  'https://productdata.awin.com/datafeed/download/apikey/8d5b91cc0cff1fe909dfcc1d4a2442c0/language/pt/cid/61,62,72,73,71,74,75,77,78,63,80,64,83,84,85,65,86,88,90,91,67,94,33,53,52,603,66,128,130,133,212,209,210,211,68,69,213,220,221,70,224,225,226,227,228,229,4,5,10,11,537,19,15,14,6,20,22,23,24,25,7,30,32,619,8,35,618,43,9,50,634,230,538,235,238,241,556,245,521,576,575,577,579,361,633,362,366,367,368,371,369,363,372,373,374,377,375,364,365,383,385,390,392,394,399,402,404,406,407,347,348,354,350,351,349,357,358,360/fid/46967/rid/0/hasEnhancedFeeds/0/columns/aw_deep_link,product_name,aw_product_id,merchant_product_id,merchant_image_url,description,merchant_category,search_price,merchant_name,merchant_id,category_name,category_id,aw_image_url,currency,store_price,delivery_cost,merchant_deep_link,language,last_updated,display_price,data_feed_id,ean/format/csv/delimiter/%2C/compression/gzip/adultcontent/1/';
+  'https://productdata.awin.com/datafeed/download/apikey/8d5b91cc0cff1fe909dfcc1d4a2442c0/fid/46967/format/csv/language/pt/delimiter/%2C/compression/gzip/columns/aw_deep_link%2Cproduct_name%2Caw_product_id%2Cmerchant_product_id%2Cmerchant_image_url%2Cdescription%2Cmerchant_category%2Csearch_price%2Cmerchant_name%2Cmerchant_id%2Ccategory_name%2Ccategory_id%2Caw_image_url%2Ccurrency%2Cstore_price%2Cdelivery_cost%2Cmerchant_deep_link%2Clanguage%2Clast_updated%2Cdisplay_price%2Cdata_feed_id%2Cean%2Cbrand_name%2Ccustom_1%2Ccustom_2%2Ccustom_3/';
 
-const BATCH_SIZE = 500;
+const BATCH_SIZE = 100;
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
@@ -304,7 +304,7 @@ function mapRowToProduct(row) {
 
   const title = row.product_name.trim();
   const searchPrice = parsePrice(row.search_price);
-  const storePrice = parsePrice(row.store_price);
+  const storePrice = parsePrice(row.custom_3 || row.store_price);
   const displayPrice = parsePrice(row.display_price);
 
   const promotionalPrice = searchPrice || storePrice || displayPrice || 99.90;
@@ -334,12 +334,29 @@ function mapRowToProduct(row) {
   const rawEan = (row.ean || row.ean_code || row.barcode || row.gtin || row.upc || '').toString().trim();
   const ean = rawEan && rawEan !== '0' && rawEan !== 'null' && rawEan !== 'undefined' ? rawEan : null;
 
+  // Marca detectada do feed oficial KaBuM!
+  const brand = (row.brand_name || '').trim() || storeInfo.storeName;
+
+  // Condição de parcelamento informada pelo KaBuM!
+  let installment = '10x sem juros';
+  if (row.custom_1) {
+    const cleanMonths = row.custom_1.replace(/installament months:\s*/i, '').trim();
+    if (cleanMonths && cleanMonths !== '0') {
+      installment = `${cleanMonths}x sem juros`;
+    }
+  }
+
+  // Validade renovada por mais 10 dias para garantir exibição na vitrine ativa
+  const endsAt = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+
   const keywords = Array.from(new Set([
     ...title.toLowerCase().split(/[\s,.-]+/).filter((w) => w.length > 2),
     storeInfo.storeName.toLowerCase(),
     categoryInfo.categoryName.toLowerCase(),
+    brand.toLowerCase(),
     ...(ean ? [ean.toLowerCase()] : []),
-    'awin'
+    'awin',
+    'kabum'
   ]));
 
   const offer = {
@@ -354,7 +371,7 @@ function mapRowToProduct(row) {
     affiliateUrl,
     inStock: true,
     freeShipping: row.delivery_cost === '0' || row.delivery_cost === '0.00' || true,
-    installment: '10x sem juros',
+    installment,
     rating: 4.8,
     reviewsCount: 110,
     lastUpdated: new Date().toISOString(),
@@ -369,7 +386,7 @@ function mapRowToProduct(row) {
     category_name: categoryInfo.categoryName,
     subcategory_id: null,
     subcategory_name: null,
-    brand: storeInfo.storeName,
+    brand,
     sku: `AWIN-${awProductId}`,
     ean: ean,
     image_url: imageUrl,
@@ -383,6 +400,7 @@ function mapRowToProduct(row) {
     reviews_count: 110,
     is_verified: true,
     is_active: true,
+    ends_at: endsAt,
     offers: [offer],
     price_history: [
       {

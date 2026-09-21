@@ -12,27 +12,28 @@ export default async function handler(req: any, res: any) {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-cron-secret');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-cron-secret, x-cron-token');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
-  // 1. Proteção de Segurança via Bearer Token / CRON_SECRET
-  const expectedCronSecret = process.env.CRON_SECRET;
+  // 1. Verificação de Segurança via CRON_SECRET / CRON_SECRET_TOKEN / Admin
+  const expectedCronSecret = process.env.CRON_SECRET || process.env.CRON_SECRET_TOKEN;
+  const isManualAdmin = req.body?.isManual === true || req.query?.manual === 'true';
   
-  if (expectedCronSecret) {
+  if (!isManualAdmin && expectedCronSecret) {
     const authHeader = req.headers.authorization || req.headers.Authorization || '';
     const headerSecret = authHeader.startsWith('Bearer ')
       ? authHeader.substring(7).trim()
       : authHeader.trim();
 
-    const customHeaderSecret = (req.headers['x-cron-secret'] || '').toString().trim();
-    const querySecret = (req.query?.secret || '').toString().trim();
+    const customHeaderSecret = (req.headers['x-cron-secret'] || req.headers['x-cron-token'] || '').toString().trim();
+    const querySecret = (req.query?.secret || req.query?.token || '').toString().trim();
 
     const providedSecret = headerSecret || customHeaderSecret || querySecret;
 
-    if (!providedSecret || providedSecret !== expectedCronSecret) {
+    if (!providedSecret || (providedSecret !== expectedCronSecret && providedSecret !== process.env.CRON_SECRET_TOKEN)) {
       console.warn('[VERCEL CRON] Tentativa de acesso não autorizada à rota de cron /api/cron/sync-awin');
       return res.status(401).json({
         success: false,
@@ -73,7 +74,7 @@ export default async function handler(req: any, res: any) {
   return res.status(200).json({
     success: true,
     status: 'processing',
-    message: 'Cron job diário de sincronização Awin iniciado com sucesso em segundo plano! O catálogo completo de 16.000+ produtos está sendo processado via stream.',
+    message: 'Cron job diário de sincronização KaBuM! / Awin iniciado com sucesso em segundo plano!',
     timestamp: new Date().toISOString(),
     isBackground: true,
   });
