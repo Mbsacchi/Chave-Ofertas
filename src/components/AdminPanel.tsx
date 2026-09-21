@@ -69,7 +69,8 @@ import {
   CheckCheck, 
   Filter, 
   ArrowUpDown,
-  Save
+  Save,
+  Loader2
 } from 'lucide-react';
 import { CATEGORIES_TREE } from '../data/mockData';
 
@@ -132,6 +133,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // Active view tab in admin
   const [activeTab, setActiveTab] = useState<'create' | 'staging' | 'published' | 'expired' | 'coupons' | 'sql'>('create');
@@ -494,39 +496,80 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setTimeout(() => setActionFeedback(null), 4000);
   };
 
-  // Login handler with strict email whitelist
+  const GENERIC_AUTH_ERROR = 'Credenciais inválidas ou acesso não autorizado.';
+  const TARGET_AUTH_LATENCY_MS = 650; // Tempo constante para neutralizar Timing Attacks
+
+  // Função para executar trabalho criptográfico sintético (equaliza tempo de CPU em branches)
+  const performDummyWork = async (input: string) => {
+    try {
+      if (typeof crypto !== 'undefined' && crypto.subtle) {
+        const enc = new TextEncoder();
+        const data = enc.encode(input + 'chave-ofertas-constant-salt-2026');
+        await crypto.subtle.digest('SHA-256', data);
+      }
+    } catch {
+      // Fallback seguro silencioso
+    }
+  };
+
+  // Login handler blindado contra Enumeração de Usuários e Timing Attacks
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
+    setIsLoggingIn(true);
 
+    const startTime = performance.now();
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Strict whitelist check
-    if (!ALLOWED_ADMIN_EMAILS.includes(normalizedEmail)) {
-      setAuthError('Acesso Negado: Este e-mail não possui privilégios de administrador.');
-      return;
-    }
-
     try {
+      // 1. Sempre realiza a chamada de autenticação ao Supabase
+      // Garante tráfego de rede e validação semelhantes para qualquer e-mail
       const { data, error } = await supabase.auth.signInWithPassword({
         email: normalizedEmail,
         password,
       });
 
-      if (error) {
-        if (error.message.includes('Invalid login credentials')) {
-          setAuthError('Senha incorreta ou usuário não cadastrado no Supabase.');
-        } else {
-          setAuthError(error.message);
-        }
-        return;
+      // 2. Se as credenciais forem inválidas (e-mail inexistente ou senha errada)
+      if (error || !data?.user) {
+        await performDummyWork(password);
+        throw new Error(GENERIC_AUTH_ERROR);
+      }
+
+      // 3. Validação de privilégios de administrador
+      // Se autenticou, mas o e-mail não pertence ao grupo de administradores:
+      const isAuthorized = Boolean(
+        data.user.email &&
+        ALLOWED_ADMIN_EMAILS.includes(data.user.email.trim().toLowerCase())
+      );
+
+      if (!isAuthorized) {
+        // Encerra imediatamente a sessão para não reter usuário comum logado no admin
+        await supabase.auth.signOut();
+        await performDummyWork(password);
+        throw new Error(GENERIC_AUTH_ERROR);
+      }
+
+      // 4. Sucesso: usuário autenticado e confirmado como administrador
+      const elapsedSuccess = performance.now() - startTime;
+      if (elapsedSuccess < TARGET_AUTH_LATENCY_MS) {
+        await new Promise((resolve) => setTimeout(resolve, TARGET_AUTH_LATENCY_MS - elapsedSuccess));
       }
 
       setSessionUser(data.user);
       loadDraftsAndProducts();
       showFeedback('success', 'Acesso administrativo autorizado!');
-    } catch (err: any) {
-      setAuthError(err.message || 'Erro ao autenticar.');
+    } catch {
+      // 5. Garantia de tempo de resposta constante em qualquer cenário de falha
+      const elapsed = performance.now() - startTime;
+      if (elapsed < TARGET_AUTH_LATENCY_MS) {
+        await new Promise((resolve) => setTimeout(resolve, TARGET_AUTH_LATENCY_MS - elapsed));
+      }
+
+      // 6. Mensagem de erro 100% unificada e genérica
+      // Não revela se o e-mail existe, se a senha está errada ou se possui cargo admin
+      setAuthError(GENERIC_AUTH_ERROR);
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -1308,10 +1351,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
               <button
                 type="submit"
-                className="w-full py-3 px-4 rounded-xl font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 active:scale-98 transition-all shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2 text-sm mt-2 cursor-pointer"
+                disabled={isLoggingIn}
+                className="w-full py-3 px-4 rounded-xl font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 disabled:opacity-60 disabled:cursor-not-allowed active:scale-98 transition-all shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2 text-sm mt-2 cursor-pointer"
               >
-                <Lock className="w-4 h-4" />
-                <span>Entrar no Painel Admin</span>
+                {isLoggingIn ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Verificando credenciais...</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-4 h-4" />
+                    <span>Entrar no Painel Admin</span>
+                  </>
+                )}
               </button>
 
               <div className="flex items-center justify-center text-xs text-slate-400 pt-3 border-t border-slate-800/80">
