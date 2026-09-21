@@ -12,9 +12,9 @@ export interface SeoMetadata {
   keywords: string;
 }
 
-const DEFAULT_TITLE = 'Chave Ofertas | Comparador de Preços e Melhores Ofertas em Tempo Real';
-const DEFAULT_DESCRIPTION = 'Compare preços em tempo real nas maiores lojas do Brasil: KaBuM!, AliExpress, Amazon, Mercado Livre e Magalu. Encontre cupons e economize sempre.';
-const SITE_URL = 'https://chaveofertas.com.br';
+export const DEFAULT_TITLE = 'Chave Ofertas | Comparador de Preços e Melhores Ofertas em Tempo Real';
+export const DEFAULT_DESCRIPTION = 'Compare preços em tempo real nas maiores lojas do Brasil: KaBuM!, AliExpress, Amazon, Mercado Livre e Magalu. Encontre cupons e economize sempre.';
+export const SITE_URL = 'https://chaveofertas.com.br';
 
 /**
  * Gera Metadados Dinâmicos Otimizados para SEO e Motores de IA (GEO)
@@ -45,7 +45,7 @@ export function generateProductMetadata(product?: Product | null): SeoMetadata {
   const prodBrand = String(product.brand || 'Geral').trim();
   const prodCategory = String(product.categoryName || 'Geral').trim();
 
-  // Título rigorosamente otimizado com 'Menor Preço'
+  // Título rigorosamente otimizado com 'Menor Preço' e marca para SEO e GEO
   const title = `${prodTitle} - Menor Preço R$ ${formattedMinPrice} | Chave Ofertas`;
 
   // Descrição persuasiva rica em entidades semânticas para LLMs e Rich Snippets
@@ -88,6 +88,46 @@ export function generateProductJsonLd(product?: Product | null) {
   const rawOffers = Array.isArray(product.offers) ? product.offers : (Array.isArray(product.prices) ? product.prices : []);
   const normalizedMin = normalizePrice(product.minPrice);
   const normalizedMax = normalizePrice(product.maxPrice || product.minPrice, normalizedMin);
+  
+  // Regras de política de devolução padrão no Brasil (CDC art. 49: 7 dias)
+  const defaultMerchantReturnPolicy = {
+    '@type': 'MerchantReturnPolicy',
+    applicableCountry: 'BR',
+    returnPolicyCategory: 'https://schema.org/MerchantReturnFiniteReturnWindow',
+    merchantReturnDays: 7,
+    returnMethod: 'https://schema.org/ReturnByMail',
+    returnFees: 'https://schema.org/FreeReturn',
+  };
+
+  // Regras de frete padrão
+  const defaultShippingDetails = {
+    '@type': 'OfferShippingDetails',
+    shippingRate: {
+      '@type': 'MonetaryAmount',
+      value: 0,
+      currency: 'BRL',
+    },
+    shippingDestination: [{
+      '@type': 'DefinedRegion',
+      addressCountry: 'BR',
+    }],
+    deliveryTime: {
+      '@type': 'ShippingDeliveryTime',
+      handlingTime: {
+        '@type': 'QuantitativeValue',
+        minValue: 1,
+        maxValue: 3,
+        unitCode: 'DAY',
+      },
+      transitTime: {
+        '@type': 'QuantitativeValue',
+        minValue: 2,
+        maxValue: 8,
+        unitCode: 'DAY',
+      },
+    },
+  };
+
   const offersList = rawOffers.map((off: any) => ({
     '@type': 'Offer',
     price: normalizePrice(off?.price || normalizedMin, normalizedMin),
@@ -100,6 +140,8 @@ export function generateProductJsonLd(product?: Product | null) {
       '@type': 'Organization',
       name: String(off?.storeName || off?.store_name || product.bestStore || 'Loja Oficial'),
     },
+    hasMerchantReturnPolicy: defaultMerchantReturnPolicy,
+    shippingDetails: defaultShippingDetails,
   }));
 
   const imageList = Array.isArray(product.images) 
@@ -130,13 +172,86 @@ export function generateProductJsonLd(product?: Product | null) {
       '@type': 'AggregateOffer',
       priceCurrency: 'BRL',
       lowPrice: normalizedMin,
-      highPrice: normalizedMax,
+      highPrice: Math.max(normalizedMax, normalizedMin),
       offerCount: Math.max(offersList.length, 1),
       offers: offersList.length > 0 ? offersList : undefined,
     },
   };
 
   return jsonLd;
+}
+
+/**
+ * Gera Schema Markup BreadcrumbList para navegação estruturada no Google SERP
+ */
+export function generateBreadcrumbJsonLd(product?: Product | null) {
+  if (!product) return null;
+
+  const categoryName = product.categoryName || 'Informática e Tecnologia';
+  const categorySlug = (product.categoryId || product.categoryName || 'geral').toLowerCase().replace(/\s+/g, '-');
+  const productSlug = product.slug || product.id || '';
+
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      {
+        '@type': 'ListItem',
+        position: 1,
+        name: 'Home',
+        item: SITE_URL,
+      },
+      {
+        '@type': 'ListItem',
+        position: 2,
+        name: categoryName,
+        item: `${SITE_URL}/categoria/${categorySlug}`,
+      },
+      {
+        '@type': 'ListItem',
+        position: 3,
+        name: product.title || 'Produto',
+        item: `${SITE_URL}/produto/${productSlug}`,
+      },
+    ],
+  };
+}
+
+/**
+ * Gera Schema Markup WebSite com SearchAction para Google Sitelinks Searchbox
+ */
+export function generateGlobalWebSiteJsonLd() {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: 'Chave Ofertas',
+    url: SITE_URL,
+    potentialAction: {
+      '@type': 'SearchAction',
+      target: {
+        '@type': 'EntryPoint',
+        urlTemplate: `${SITE_URL}/?q={search_term_string}`,
+      },
+      'query-input': 'required name=search_term_string',
+    },
+  };
+}
+
+/**
+ * Gera Schema Markup Organization para reconhecimento da marca por IAs e Google Knowledge Graph
+ */
+export function generateOrganizationJsonLd() {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'Organization',
+    name: 'Chave Ofertas',
+    url: SITE_URL,
+    logo: `${SITE_URL}/key-icon.svg`,
+    sameAs: [
+      'https://www.instagram.com/chaveofertas',
+    ],
+    description: 'Comparador de preços inteligente e cupons de desconto verificados em tempo real.',
+  };
 }
 
 /**
@@ -151,6 +266,7 @@ export function useProductSeo(product?: Product | null) {
 
     const meta = generateProductMetadata(product);
     const jsonLd = generateProductJsonLd(product);
+    const breadcrumbLd = generateBreadcrumbJsonLd(product);
 
     // 1. Atualiza Título
     document.title = meta.title;
@@ -192,7 +308,7 @@ export function useProductSeo(product?: Product | null) {
     }
     canonical.setAttribute('href', meta.canonicalUrl);
 
-    // 7. Injeção do Schema Markup JSON-LD (Product + AggregateOffer)
+    // 7. Injeção do Schema Markup JSON-LD (Product)
     const scriptId = 'product-schema-jsonld';
     let scriptTag = document.getElementById(scriptId) as HTMLScriptElement | null;
     if (!scriptTag) {
@@ -203,6 +319,17 @@ export function useProductSeo(product?: Product | null) {
     }
     scriptTag.textContent = JSON.stringify(jsonLd);
 
+    // 8. Injeção do Schema Markup JSON-LD (Breadcrumbs)
+    const breadcrumbScriptId = 'breadcrumb-schema-jsonld';
+    let breadcrumbScriptTag = document.getElementById(breadcrumbScriptId) as HTMLScriptElement | null;
+    if (!breadcrumbScriptTag) {
+      breadcrumbScriptTag = document.createElement('script');
+      breadcrumbScriptTag.id = breadcrumbScriptId;
+      breadcrumbScriptTag.type = 'application/ld+json';
+      document.head.appendChild(breadcrumbScriptTag);
+    }
+    breadcrumbScriptTag.textContent = JSON.stringify(breadcrumbLd);
+
     // Limpeza ao desmontar
     return () => {
       document.title = DEFAULT_TITLE;
@@ -210,6 +337,10 @@ export function useProductSeo(product?: Product | null) {
       const existingScript = document.getElementById(scriptId);
       if (existingScript) {
         existingScript.remove();
+      }
+      const existingBreadcrumb = document.getElementById(breadcrumbScriptId);
+      if (existingBreadcrumb) {
+        existingBreadcrumb.remove();
       }
     };
   }, [product]);
