@@ -15,7 +15,7 @@ const AWIN_DATAFEED_URL =
   process.env.AWIN_DATAFEED_URL ||
   'https://productdata.awin.com/datafeed/download/apikey/8d5b91cc0cff1fe909dfcc1d4a2442c0/fid/46967/format/csv/language/pt/delimiter/%2C/compression/gzip/columns/aw_deep_link%2Cproduct_name%2Caw_product_id%2Cmerchant_product_id%2Cmerchant_image_url%2Cdescription%2Cmerchant_category%2Csearch_price%2Cmerchant_name%2Cmerchant_id%2Ccategory_name%2Ccategory_id%2Caw_image_url%2Ccurrency%2Cstore_price%2Cdelivery_cost%2Cmerchant_deep_link%2Clanguage%2Clast_updated%2Cdisplay_price%2Cdata_feed_id%2Cean%2Cbrand_name%2Ccustom_1%2Ccustom_2%2Ccustom_3/';
 
-const BATCH_SIZE = 100;
+const BATCH_SIZE = 500;
 
 function parsePrice(val: any): number {
   if (val === null || val === undefined) return 0;
@@ -400,7 +400,7 @@ export async function processAwinStreamSync(supabase: any, maxLimit = 0) {
         collectedProducts.push(product);
       }
 
-      // Flush em lotes de BATCH_SIZE (100)
+      // Flush em lotes de BATCH_SIZE (250)
       if (batch.length >= BATCH_SIZE) {
         batchNumber++;
         const currentBatch = [...batch];
@@ -408,27 +408,25 @@ export async function processAwinStreamSync(supabase: any, maxLimit = 0) {
 
         if (supabase) {
           try {
-            const { error } = await supabase.from('products').upsert(currentBatch, { onConflict: 'id', ignoreDuplicates: false });
-            if (error) {
-              console.error(`❌ [AWIN Lote #${batchNumber}] Erro no Supabase:`, error.message);
+            const todayStr = new Date().toISOString().split('T')[0];
+            const priceHistoryBatch = currentBatch.map((p) => ({
+              id: `ph-${p.id}-${todayStr}`,
+              product_id: p.id,
+              price: p.min_price,
+              recorded_at: new Date().toISOString(),
+            }));
+
+            // Gravação paralela de produtos e histórico de preços para máxima performance
+            const [prodRes] = await Promise.all([
+              supabase.from('products').upsert(currentBatch, { onConflict: 'id', ignoreDuplicates: false }),
+              supabase.from('price_history').upsert(priceHistoryBatch, { onConflict: 'id', ignoreDuplicates: false }).catch(() => null),
+            ]);
+
+            if (prodRes?.error) {
+              console.error(`❌ [AWIN Lote #${batchNumber}] Erro no Supabase:`, prodRes.error.message);
             } else {
               upsertedCount += currentBatch.length;
               console.log(`✅ [AWIN Lote #${batchNumber}] ${currentBatch.length} produtos gravados. Total acumulado: ${upsertedCount}`);
-
-              // Inserção no histórico de preços (Inteligência de Tendências)
-              const todayStr = new Date().toISOString().split('T')[0];
-              const priceHistoryBatch = currentBatch.map((p) => ({
-                id: `ph-${p.id}-${todayStr}`,
-                product_id: p.id,
-                price: p.min_price,
-                recorded_at: new Date().toISOString(),
-              }));
-
-              try {
-                await supabase.from('price_history').upsert(priceHistoryBatch, { onConflict: 'id', ignoreDuplicates: false });
-              } catch (phErr) {
-                // Silencioso se tabela estiver sendo provisionada
-              }
             }
           } catch (batchErr: any) {
             console.error(`❌ [AWIN Lote #${batchNumber}] Exceção no upsert:`, batchErr.message);
@@ -442,24 +440,24 @@ export async function processAwinStreamSync(supabase: any, maxLimit = 0) {
       batchNumber++;
       if (supabase) {
         try {
-          const { error } = await supabase.from('products').upsert(batch, { onConflict: 'id', ignoreDuplicates: false });
-          if (!error) {
+          const todayStr = new Date().toISOString().split('T')[0];
+          const priceHistoryBatch = batch.map((p) => ({
+            id: `ph-${p.id}-${todayStr}`,
+            product_id: p.id,
+            price: p.min_price,
+            recorded_at: new Date().toISOString(),
+          }));
+
+          const [prodRes] = await Promise.all([
+            supabase.from('products').upsert(batch, { onConflict: 'id', ignoreDuplicates: false }),
+            supabase.from('price_history').upsert(priceHistoryBatch, { onConflict: 'id', ignoreDuplicates: false }).catch(() => null),
+          ]);
+
+          if (prodRes?.error) {
+            console.error(`❌ [AWIN Lote Final] Erro Supabase:`, prodRes.error.message);
+          } else {
             upsertedCount += batch.length;
             console.log(`✅ [AWIN Lote Final #${batchNumber}] ${batch.length} produtos gravados. Total: ${upsertedCount}`);
-
-            const todayStr = new Date().toISOString().split('T')[0];
-            const priceHistoryBatch = batch.map((p) => ({
-              id: `ph-${p.id}-${todayStr}`,
-              product_id: p.id,
-              price: p.min_price,
-              recorded_at: new Date().toISOString(),
-            }));
-
-            try {
-              await supabase.from('price_history').upsert(priceHistoryBatch, { onConflict: 'id', ignoreDuplicates: false });
-            } catch (phErr) {
-              // Silencioso
-            }
           }
         } catch (batchErr: any) {
           console.error(`❌ [AWIN Lote Final] Exceção:`, batchErr.message);
@@ -501,51 +499,52 @@ export default async function handler(req: any, res: any) {
       })
     : null;
 
-  // Parâmetros opcionais (ex: limit=100 para botão do painel, limit=0 para cron background completo)
-  const maxLimit = req.query?.limit !== undefined 
-    ? parseInt(req.query.limit, 10) 
-    : (req.body?.limit !== undefined ? parseInt(req.body.limit, 10) : 100);
+  // Parâmetros opcionais (limit=0 para catálogo completo, background=true para execução em segundo plano)
+  const queryLimit = req.query?.limit !== undefined ? parseInt(req.query.limit, 10) : undefined;
+  const bodyLimit = req.body?.limit !== undefined ? parseInt(req.body.limit, 10) : undefined;
+  const maxLimit = queryLimit !== undefined ? queryLimit : (bodyLimit !== undefined ? bodyLimit : 0);
+  const isBackground = req.query?.background === 'true' || req.body?.background === true;
 
-  console.log(`[KABUM SYNC API] Requisição recebida com maxLimit=${maxLimit}`);
+  console.log(`[KABUM SYNC API] Requisição recebida com maxLimit=${maxLimit} (0 = todo o catálogo), isBackground=${isBackground}`);
 
-  // Se limit for maior que 0 (ex: 100 itens acionado pelo botão do admin), processa diretamente para resposta instantânea
-  if (maxLimit > 0) {
+  // Modo segundo plano explícito (caso requisitado por workers ou cron assíncrono)
+  if (isBackground) {
+    console.log(`[KABUM SYNC API] Disparando worker completo em background (Fire-and-Forget)...`);
+    const syncTaskPromise = processAwinStreamSync(supabase, maxLimit).catch((err) => {
+      console.error('[KABUM BACKGROUND SYNC] Erro durante processamento:', err.message);
+    });
+
     try {
-      const result = await processAwinStreamSync(supabase, maxLimit);
-      return res.status(200).json({
-        success: true,
-        status: 'completed',
-        count: result.upsertedCount || result.processedCount,
-        products: result.products || [],
-        duration: result.duration,
-        message: `${result.upsertedCount || result.processedCount} ofertas da KaBuM! sincronizadas e atualizadas com sucesso!`,
-      });
-    } catch (err: any) {
-      console.error('[KABUM SYNC API] Erro no processamento síncrono:', err.message);
-      return res.status(500).json({
-        success: false,
-        error: err.message || 'Erro ao sincronizar ofertas da KaBuM!.',
-      });
+      waitUntil(syncTaskPromise);
+    } catch {
+      console.log('[KABUM SYNC API] Executando em background via Node Event Loop');
     }
+
+    return res.status(200).json({
+      success: true,
+      status: 'processing',
+      message: 'Sincronização completa de todas as ofertas da KaBuM! iniciada em segundo plano!',
+      startedAt: new Date().toISOString(),
+      isBackground: true,
+    });
   }
 
-  // Se limit === 0 (Cron diário completo com 4.996 itens em background):
-  console.log(`[KABUM SYNC API] Disparando worker completo em background (Fire-and-Forget)...`);
-  const syncTaskPromise = processAwinStreamSync(supabase, 0).catch((err) => {
-    console.error('[KABUM BACKGROUND SYNC] Erro durante processamento:', err.message);
-  });
-
+  // Modo síncrono padrão (usado pelo botão do painel admin para sincronizar tudo e retornar a contagem real)
   try {
-    waitUntil(syncTaskPromise);
-  } catch (wErr: any) {
-    console.log('[KABUM SYNC API] Executando em background via Node Event Loop');
+    const result = await processAwinStreamSync(supabase, maxLimit);
+    const count = result.upsertedCount || result.processedCount;
+    return res.status(200).json({
+      success: true,
+      status: 'completed',
+      count,
+      duration: result.duration,
+      message: `${count.toLocaleString('pt-BR')} ofertas oficiais da KaBuM! sincronizadas e atualizadas com sucesso!`,
+    });
+  } catch (err: any) {
+    console.error('[KABUM SYNC API] Erro no processamento:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: err.message || 'Erro ao sincronizar ofertas da KaBuM!.',
+    });
   }
-
-  return res.status(200).json({
-    success: true,
-    status: 'processing',
-    message: 'Sincronização completa de todas as ofertas da KaBuM! iniciada em segundo plano!',
-    startedAt: new Date().toISOString(),
-    isBackground: true,
-  });
 }

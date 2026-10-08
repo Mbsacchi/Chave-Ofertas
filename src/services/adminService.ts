@@ -565,14 +565,41 @@ export const fetchAllGlobalProducts = async (): Promise<Product[]> => {
 
   if (isSupabaseConfigured) {
     try {
-      // Clean query with NO user_id, author, created_by or source filters
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .order('created_at', { ascending: false });
+      // Busca paginada para carregar todo o catálogo do Supabase (sem corte no limite padrão de 1000 linhas)
+      let allRows: any[] = [];
+      const PAGE_SIZE = 1000;
+      let page = 0;
+      let hasMore = true;
 
-      if (!error && data && data.length > 0) {
-        dbProducts = data.map((p: any) => ({
+      while (hasMore) {
+        const from = page * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+
+        const { data, error } = await supabase
+          .from('products')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .range(from, to);
+
+        if (error) {
+          console.warn(`[fetchAllGlobalProducts] Erro ao buscar produtos da página ${page}:`, error);
+          break;
+        }
+
+        if (data && data.length > 0) {
+          allRows.push(...data);
+          if (data.length < PAGE_SIZE) {
+            hasMore = false;
+          } else {
+            page++;
+          }
+        } else {
+          hasMore = false;
+        }
+      }
+
+      if (allRows.length > 0) {
+        dbProducts = allRows.map((p: any) => ({
           id: p.id,
           title: p.title,
           slug: p.slug,
@@ -1026,10 +1053,10 @@ export const syncAwinOffers = async (): Promise<{ count: number; products: Produ
   let data: any;
 
   try {
-    const res = await fetch('/api/awin-sync?limit=100', {
+    const res = await fetch('/api/awin-sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limit: 100 }), // 100 itens processados para resposta rápida
+      body: JSON.stringify({ limit: 0 }), // 0 = todo o catálogo da KaBuM! (~4.700+ ofertas)
     });
 
     const text = await res.text();
@@ -1043,34 +1070,11 @@ export const syncAwinOffers = async (): Promise<{ count: number; products: Produ
       throw new Error(data?.error || 'Erro ao sincronizar com a API Awin / KaBuM!.');
     }
 
-    if (data.products && Array.isArray(data.products) && data.products.length > 0) {
-      data.products = data.products.map((p: any) => ({
-        id: p.id,
-        title: p.title,
-        slug: p.slug,
-        description: p.description || '',
-        categoryId: p.category_id || p.categoryId,
-        categoryName: p.category_name || p.categoryName,
-        brand: p.brand || 'KaBuM!',
-        sku: p.sku || '',
-        imageUrl: p.image_url || p.imageUrl,
-        searchKeywords: p.search_keywords || [],
-        minPrice: Number(p.min_price || p.minPrice),
-        maxPrice: Number(p.max_price || p.maxPrice),
-        historicalLowestPrice: Number(p.historical_lowest_price || p.historicalLowestPrice) || Number(p.min_price),
-        bestStore: p.best_store || p.bestStore || 'KaBuM!',
-        bestStoreId: 'kabum' as any,
-        rating: Number(p.rating) || 4.8,
-        reviewsCount: Number(p.reviews_count || p.reviewsCount) || 110,
-        isVerified: true,
-        isActive: true,
-        endsAt: p.ends_at || p.endsAt || new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
-        createdAt: p.created_at || new Date().toISOString(),
-        updatedAt: p.updated_at || new Date().toISOString(),
-        offers: p.offers || [],
-        priceHistory: p.price_history || [],
-      }));
-    }
+    return {
+      count: Number(data.count) || 0,
+      products: [],
+      message: data.message || `${(Number(data.count) || 0).toLocaleString('pt-BR')} ofertas oficiais da KaBuM! sincronizadas com sucesso!`,
+    };
   } catch (fetchErr: any) {
     console.warn('API /api/awin-sync offline ou inacessível, executando renovação direta das ofertas KaBuM! no Supabase:', fetchErr.message);
 
@@ -1097,85 +1101,12 @@ export const syncAwinOffers = async (): Promise<{ count: number; products: Produ
       (p) => (p.bestStore || '').toLowerCase().includes('kabum') || (p.bestStoreId || '') === 'kabum'
     );
 
-    data = {
-      success: true,
+    return {
       count: kabumList.length,
-      message: `${kabumList.length} ofertas oficiais da KaBuM! atualizadas e ativas com sucesso!`,
       products: kabumList,
+      message: `${kabumList.length.toLocaleString('pt-BR')} ofertas oficiais da KaBuM! atualizadas e ativas com sucesso!`,
     };
   }
-
-  const incomingProducts: Product[] = data.products || [];
-  const custom = getStoredCustomProducts();
-
-  let upsertedCount = 0;
-
-  for (const newProd of incomingProducts) {
-    const validEndsAt = newProd.endsAt || new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
-
-    // 1. Upsert to Supabase (Updates existing Awin links or inserts new ones)
-    if (isSupabaseConfigured) {
-      try {
-        await supabase.from('products').upsert({
-          id: newProd.id,
-          title: newProd.title,
-          slug: newProd.slug,
-          description: newProd.description,
-          category_id: newProd.categoryId,
-          category_name: newProd.categoryName,
-          brand: newProd.brand,
-          sku: newProd.sku,
-          image_url: newProd.imageUrl,
-          min_price: newProd.minPrice,
-          max_price: newProd.maxPrice,
-          historical_lowest_price: newProd.historicalLowestPrice,
-          best_store: newProd.bestStore || 'KaBuM!',
-          best_store_id: newProd.bestStoreId || 'kabum',
-          rating: newProd.rating,
-          reviews_count: newProd.reviewsCount,
-          is_verified: newProd.isVerified,
-          is_active: true,
-          ends_at: validEndsAt,
-          offers: newProd.offers,
-          price_history: newProd.priceHistory,
-          created_at: newProd.createdAt,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'id' });
-      } catch (dbErr) {
-        console.warn('Supabase upsert KaBuM! product error:', dbErr);
-      }
-    }
-
-    // 2. Upsert to Local Storage (Update existing or unshift new)
-    const existingIndex = custom.findIndex(
-      (p) => p.id === newProd.id || p.title.toLowerCase().trim() === newProd.title.toLowerCase().trim()
-    );
-
-    if (existingIndex !== -1) {
-      custom[existingIndex] = {
-        ...custom[existingIndex],
-        ...newProd,
-        endsAt: validEndsAt,
-        offers: newProd.offers,
-        updatedAt: new Date().toISOString(),
-      };
-    } else {
-      custom.unshift({
-        ...newProd,
-        endsAt: validEndsAt,
-      });
-    }
-
-    upsertedCount++;
-  }
-
-  saveStoredCustomProducts(custom);
-
-  return {
-    count: upsertedCount || incomingProducts.length,
-    products: incomingProducts,
-    message: data.message || `${incomingProducts.length} ofertas oficiais da KaBuM! sincronizadas com sucesso!`,
-  };
 };
 
 /**
