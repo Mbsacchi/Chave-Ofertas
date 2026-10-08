@@ -170,7 +170,10 @@ export function executeFuzzySearch(
       case 'relevance':
       default:
         if (!sanitized) {
-          // Default sorting when no query: higher rating and review count
+          // Quando não há busca digitada, prioriza ofertas mais recentes (mais novas no topo)
+          const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          if (timeA !== timeB) return timeB - timeA;
           return (b.rating * 10 + Math.min(b.reviewsCount / 100, 20)) - (a.rating * 10 + Math.min(a.reviewsCount / 100, 20));
         }
         // When searching, preserve Fuse.js relevance ranking

@@ -63,7 +63,7 @@ export interface Product {
   bestStoreId: StoreId;
   offers: StoreOffer[];
   prices?: any[];
-  priceHistory: PriceHistoryPoint[];
+  priceHistory?: PriceHistoryPoint[];
   rating: number;
   reviewsCount: number;
   clickCount?: number;

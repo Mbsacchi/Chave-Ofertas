@@ -16,6 +16,7 @@ import { Footer } from './components/Footer';
 import { SortDropdown } from './components/SortDropdown';
 import { AdminPanel, ALLOWED_ADMIN_EMAILS } from './components/AdminPanel';
 import { MOCK_PRODUCTS, CATEGORIES_TREE } from './data/mockData';
+import { SEED_VITRINE_PRODUCTS } from './data/seedVitrineProducts';
 import { executeFuzzySearch } from './lib/search/fuzzySearch';
 import { groupAndConsolidateProducts } from './lib/comparator/productGrouper';
 import { Product, StoreId, SearchState, Coupon } from './types';
@@ -86,22 +87,28 @@ export const AppContent: React.FC = () => {
     }
   }, [user]);
 
-  // Dynamic Live Database Products with SWR Instant Local Cache (0ms first paint)
+  // Dynamic Live Database Products with SWR Instant Local Cache and Seeded Fallback (0ms first paint)
   const [liveCustomProducts, setLiveCustomProducts] = useState<Product[]>(() => {
     if (typeof window !== 'undefined') {
       try {
         const cached = localStorage.getItem('chave_vitrine_cache');
         if (cached) {
           const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
+          if (Array.isArray(parsed) && parsed.length >= 10) {
             return parsed;
+          }
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // Mescla produtos personalizados em cache com as ofertas do SEED
+            const cachedIds = new Set(parsed.map((p: any) => p.id));
+            const extraSeed = SEED_VITRINE_PRODUCTS.filter(p => !cachedIds.has(p.id));
+            return [...parsed, ...extraSeed];
           }
         }
       } catch (e) {
         console.warn('Erro ao carregar cache local de produtos:', e);
       }
     }
-    return [];
+    return SEED_VITRINE_PRODUCTS;
   });
   // Dynamic Real Coupons from Supabase (sem mock)
   const [realCoupons, setRealCoupons] = useState<Coupon[]>([]);

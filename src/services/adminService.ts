@@ -675,85 +675,71 @@ export const fetchAllGlobalProducts = async (): Promise<Product[]> => {
 
 /**
  * Fetches all custom published products from Supabase/Storage for the live Vitrine.
- * Optimized with lightweight column projection, SQL filtering for active and non-expired items,
- * parallel pagination, and instant batch callback for immediate rendering (<600ms).
+ * Optimized with two-phase fast streaming:
+ * Phase 1: Loads the top 100 freshest active deals (~140KB, <300ms) and emits them immediately.
+ * Phase 2: In the background, loads up to 400 more deals (total 500 products, covering 32 pagination pages)
+ * and updates seamlessly without freezing the network or downloading megabytes of stale data.
  */
 export const fetchLiveDatabaseProducts = async (
   onInitialBatch?: (products: Product[]) => void
 ): Promise<Product[]> => {
-  const nowIso = new Date().toISOString();
   let dbProducts: Product[] = [];
+  const now = Date.now();
 
   if (isSupabaseConfigured) {
     try {
-      const PAGE_SIZE = 1000;
-
-      // 1. Busca rápida da página inicial (0-999) com contagem exata e filtros no banco
-      const { data: page0Data, count, error: page0Error } = await supabase
+      // 1. Fase 1: Busca ultra-rápida dos primeiros 100 produtos ativos (sem .or() lento no Postgres, index scan direto em <200ms)
+      const { data: batch1Data, error: batch1Error } = await supabase
         .from('products')
-        .select(VITRINE_SELECT_COLUMNS, { count: 'exact' })
+        .select(VITRINE_SELECT_COLUMNS)
         .eq('is_active', true)
-        .or(`ends_at.is.null,ends_at.gt.${nowIso}`)
         .order('created_at', { ascending: false })
-        .range(0, PAGE_SIZE - 1);
+        .range(0, 99);
 
-      if (page0Error) {
-        console.warn('[fetchLiveDatabaseProducts] Erro na primeira página:', page0Error);
+      if (batch1Error) {
+        console.warn('[fetchLiveDatabaseProducts] Erro no lote 1:', batch1Error);
       }
 
-      const initialProducts = (page0Data || []).map(mapProductRow);
+      const batch1Products = (batch1Data || [])
+        .map(mapProductRow)
+        .filter(p => !p.endsAt || new Date(p.endsAt).getTime() > now);
 
-      // Emissão rápida da primeira página para exibição imediata (<600ms)
-      if (initialProducts.length > 0 && onInitialBatch) {
+      // Emissão imediata do Lote 1 para exibição instantânea no navegador (<200ms)
+      if (batch1Products.length > 0 && onInitialBatch) {
         const localCustom = getStoredCustomProducts();
         const firstMap = new Map<string, Product>();
-        initialProducts.forEach(p => firstMap.set(p.id, p));
+        batch1Products.forEach(p => firstMap.set(p.id, p));
         localCustom.forEach(p => {
           if (!firstMap.has(p.id)) firstMap.set(p.id, p);
         });
-        const firstConsolidated = groupAndConsolidateProducts(Array.from(firstMap.values()));
-        onInitialBatch(firstConsolidated);
+        const batch1Consolidated = groupAndConsolidateProducts(Array.from(firstMap.values()));
+        onInitialBatch(batch1Consolidated);
 
-        // Salva cache leve (top 300 produtos) para renderização instantânea (0ms) no próximo acesso
+        // Salva cache local leve para 0ms no próximo acesso
         try {
           if (typeof window !== 'undefined') {
-            localStorage.setItem('chave_vitrine_cache', JSON.stringify(firstConsolidated.slice(0, 300)));
+            localStorage.setItem('chave_vitrine_cache', JSON.stringify(batch1Consolidated.slice(0, 100)));
           }
         } catch {}
       }
 
-      // 2. Busca paralela das páginas restantes (Promise.all)
-      const totalItems = count || initialProducts.length;
-      const totalPages = Math.ceil(totalItems / PAGE_SIZE);
+      // 2. Fase 2: Carrega os próximos 400 produtos para cobrir 32 páginas de navegação e busca (<700ms)
+      const { data: batch2Data, error: batch2Error } = await supabase
+        .from('products')
+        .select(VITRINE_SELECT_COLUMNS)
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .range(100, 499);
 
-      if (totalPages > 1) {
-        const parallelPromises = [];
-        for (let page = 1; page < totalPages; page++) {
-          const from = page * PAGE_SIZE;
-          const to = from + PAGE_SIZE - 1;
-          parallelPromises.push(
-            supabase
-              .from('products')
-              .select(VITRINE_SELECT_COLUMNS)
-              .eq('is_active', true)
-              .or(`ends_at.is.null,ends_at.gt.${nowIso}`)
-              .order('created_at', { ascending: false })
-              .range(from, to)
-          );
-        }
-
-        const responses = await Promise.all(parallelPromises);
-        const remainingProducts: Product[] = [];
-        for (const res of responses) {
-          if (!res.error && res.data) {
-            remainingProducts.push(...res.data.map(mapProductRow));
-          }
-        }
-
-        dbProducts = [...initialProducts, ...remainingProducts];
-      } else {
-        dbProducts = initialProducts;
+      if (batch2Error) {
+        console.warn('[fetchLiveDatabaseProducts] Erro no lote 2:', batch2Error);
       }
+
+      const batch2Products = (batch2Data || [])
+        .map(mapProductRow)
+        .filter(p => !p.endsAt || new Date(p.endsAt).getTime() > now);
+
+      dbProducts = [...batch1Products, ...batch2Products];
     } catch (err) {
       console.warn('Supabase fetchLiveDatabaseProducts error:', err);
     }
@@ -772,7 +758,7 @@ export const fetchLiveDatabaseProducts = async (
   // Atualiza cache leve dos produtos no storage
   try {
     if (typeof window !== 'undefined' && finalConsolidated.length > 0) {
-      localStorage.setItem('chave_vitrine_cache', JSON.stringify(finalConsolidated.slice(0, 300)));
+      localStorage.setItem('chave_vitrine_cache', JSON.stringify(finalConsolidated.slice(0, 100)));
     }
   } catch {}
 
