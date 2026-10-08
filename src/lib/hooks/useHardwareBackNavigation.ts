@@ -37,14 +37,13 @@ export function useHardwareBackNavigation({
   const isHandlingPopState = useRef(false);
   const pushedStateCount = useRef(0);
 
-  // Compute if any overlay is active
+  // Compute if any modal overlay is active (tabs are navigated via real URL paths)
   const hasActiveOverlay =
     isMobileDrawerOpen ||
     isMobileFilterOpen ||
     Boolean(comparingProduct) ||
     Boolean(alertProduct) ||
-    showAuthModal ||
-    activeTab !== 'all';
+    showAuthModal;
 
   // Store latest handlers in refs to avoid stale closures in event listener
   const handlersRef = useRef({
@@ -109,8 +108,6 @@ export function useHardwareBackNavigation({
         h.onCloseMobileFilter();
       } else if (h.isMobileDrawerOpen) {
         h.onCloseMobileDrawer();
-      } else if (h.activeTab !== 'all') {
-        h.onResetTab();
       }
 
       pushedStateCount.current = 0;

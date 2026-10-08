@@ -92,10 +92,21 @@ export const AppContent: React.FC = () => {
   const [realCoupons, setRealCoupons] = useState<Coupon[]>([]);
   const [isLoadingCoupons, setIsLoadingCoupons] = useState(false);
 
+  // Popstate sync for /admin, /cupons, /favoritos, and home
   useEffect(() => {
     const handlePopState = () => {
-      const isAdmin = window.location.pathname.startsWith('/admin') || window.location.hash === '#admin';
+      const pathname = window.location.pathname;
+      const hash = window.location.hash;
+      const isAdmin = pathname.startsWith('/admin') || hash === '#admin';
       setViewMode(isAdmin ? 'admin' : 'vitrine');
+
+      if (pathname.startsWith('/cupons') || hash === '#cupons') {
+        setActiveTab('coupons');
+      } else if (pathname.startsWith('/favoritos') || hash === '#favoritos') {
+        setActiveTab('favorites');
+      } else if (!pathname.startsWith('/produto/') && !isAdmin) {
+        setActiveTab('all');
+      }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -140,6 +151,22 @@ export const AppContent: React.FC = () => {
   const navigateToVitrine = () => {
     window.history.pushState({}, '', '/');
     setViewMode('vitrine');
+    setActiveTab('all');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleTabChange = (tab: 'all' | 'coupons' | 'favorites') => {
+    setActiveTab(tab);
+    if (viewMode === 'admin') {
+      setViewMode('vitrine');
+    }
+    if (tab === 'coupons') {
+      window.history.pushState({}, '', '/cupons');
+    } else if (tab === 'favorites') {
+      window.history.pushState({}, '', '/favoritos');
+    } else {
+      window.history.pushState({}, '', '/');
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -185,8 +212,20 @@ export const AppContent: React.FC = () => {
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Navigation tab
-  const [activeTab, setActiveTab] = useState<'all' | 'coupons' | 'favorites'>('all');
+  // Navigation tab with URL deep-linking (/cupons, /favoritos)
+  const [activeTab, setActiveTab] = useState<'all' | 'coupons' | 'favorites'>(() => {
+    if (typeof window !== 'undefined') {
+      const pathname = window.location.pathname;
+      const hash = window.location.hash;
+      if (pathname.startsWith('/cupons') || hash === '#cupons') {
+        return 'coupons';
+      }
+      if (pathname.startsWith('/favoritos') || hash === '#favoritos') {
+        return 'favorites';
+      }
+    }
+    return 'all';
+  });
 
   // Mobile Drawer & Bottom Sheet states
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
@@ -212,7 +251,13 @@ export const AppContent: React.FC = () => {
     setComparingProduct(null);
     setProductRouteNotFound(false);
     if (window.location.pathname.startsWith('/produto/')) {
-      window.history.pushState({}, '', '/');
+      if (activeTab === 'coupons') {
+        window.history.pushState({}, '', '/cupons');
+      } else if (activeTab === 'favorites') {
+        window.history.pushState({}, '', '/favoritos');
+      } else {
+        window.history.pushState({}, '', '/');
+      }
     }
   };
 
@@ -272,6 +317,33 @@ export const AppContent: React.FC = () => {
     };
   }, [allProducts]);
 
+  // Dynamic Title & Meta Description SEO Sync based on Route / Active Tab
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    if (activeTab === 'coupons') {
+      document.title = 'Cupons de Desconto Verificados e Ativos | Chave Ofertas';
+      const metaDesc = document.querySelector('meta[name="description"]');
+      if (metaDesc) {
+        metaDesc.setAttribute(
+          'content',
+          'Encontre os melhores cupons de desconto ativos e verificados para KaBuM!, AliExpress, Amazon, Mercado Livre e Shopee. Economize em suas compras com o Chave Ofertas.'
+        );
+      }
+    } else if (activeTab === 'favorites') {
+      document.title = 'Meus Produtos Favoritos | Chave Ofertas';
+    } else if (activeTab === 'all' && !comparingProduct && viewMode !== 'admin') {
+      document.title = 'Chave Ofertas | Comparador de Preços e Cupons Verificados';
+      const metaDesc = document.querySelector('meta[name="description"]');
+      if (metaDesc) {
+        metaDesc.setAttribute(
+          'content',
+          'Compare preços em tempo real nas maiores lojas do Brasil: KaBuM!, AliExpress, Amazon, Mercado Livre e Shopee. Encontre o menor preço e cupons verificados.'
+        );
+      }
+    }
+  }, [activeTab, comparingProduct, viewMode]);
+
   // Lock body scroll whenever any drawer, bottom sheet, or modal is open
   const isAnyOverlayOpen =
     isMobileDrawerOpen ||
@@ -297,7 +369,7 @@ export const AppContent: React.FC = () => {
     showAuthModal,
     onCloseAuthModal: closeAuthModal,
     activeTab,
-    onResetTab: () => setActiveTab('all'),
+    onResetTab: () => handleTabChange('all'),
   });
 
   // Reset page to 1 whenever filters or search query change
@@ -426,7 +498,7 @@ export const AppContent: React.FC = () => {
     setOnlyWithCoupons(false);
     setMinRating(undefined);
     setSearchQuery('');
-    setActiveTab('all');
+    handleTabChange('all');
     setCurrentPage(1);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -465,7 +537,7 @@ export const AppContent: React.FC = () => {
       {/* 1. Main Header / Navbar */}
       <Navbar
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={handleTabChange}
         onOpenMobileMenu={() => setIsMobileDrawerOpen(true)}
         onLogoClick={handleResetFilters}
       />
@@ -477,20 +549,20 @@ export const AppContent: React.FC = () => {
         onSelectCategory={(catId) => {
           setSelectedCategory(catId);
           setSelectedSubcategory(undefined);
-          setActiveTab('all');
+          handleTabChange('all');
         }}
         onSelectSubcategory={(catId, subId) => {
           setSelectedCategory(catId);
           setSelectedSubcategory(subId);
-          setActiveTab('all');
+          handleTabChange('all');
         }}
         onSelectBrand={(brand) => {
           if (!selectedBrands.includes(brand)) {
             setSelectedBrands((prev) => [...prev, brand]);
           }
-          setActiveTab('all');
+          handleTabChange('all');
         }}
-        onTabChange={setActiveTab}
+        onTabChange={handleTabChange}
         activeTab={activeTab}
         isMobileDrawerOpen={isMobileDrawerOpen}
         onCloseMobileDrawer={() => setIsMobileDrawerOpen(false)}
@@ -747,7 +819,7 @@ export const AppContent: React.FC = () => {
                   <div className="space-y-1">
                     <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
                       <button
-                        onClick={() => setActiveTab('all')}
+                        onClick={() => handleTabChange('all')}
                         className="font-bold hover:text-amber-500 transition-colors cursor-pointer"
                       >
                         Início
@@ -767,7 +839,7 @@ export const AppContent: React.FC = () => {
 
                   {/* Return Button */}
                   <button
-                    onClick={() => setActiveTab('all')}
+                    onClick={() => handleTabChange('all')}
                     className="flex items-center gap-2 py-2.5 px-4 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs shadow-glow-amber transition-all active:scale-95 shrink-0 cursor-pointer"
                   >
                     <ArrowLeft className="w-4 h-4" />
@@ -800,7 +872,7 @@ export const AppContent: React.FC = () => {
                       </p>
                     </div>
                     <button
-                      onClick={() => setActiveTab('all')}
+                      onClick={() => handleTabChange('all')}
                       className="px-6 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs transition-all shadow-glow-amber active:scale-95 cursor-pointer"
                     >
                       Explorar Vitrine de Ofertas
@@ -827,7 +899,7 @@ export const AppContent: React.FC = () => {
                   <div className="space-y-1">
                     <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
                       <button
-                        onClick={() => setActiveTab('all')}
+                        onClick={() => handleTabChange('all')}
                         className="font-bold hover:text-amber-500 transition-colors cursor-pointer"
                       >
                         Início
@@ -847,7 +919,7 @@ export const AppContent: React.FC = () => {
 
                   {/* Return Button */}
                   <button
-                    onClick={() => setActiveTab('all')}
+                    onClick={() => handleTabChange('all')}
                     className="flex items-center gap-2 py-2.5 px-4 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs shadow-glow-amber transition-all active:scale-95 shrink-0 cursor-pointer"
                   >
                     <ArrowLeft className="w-4 h-4" />
@@ -865,7 +937,7 @@ export const AppContent: React.FC = () => {
                       Clique no ícone de coração em qualquer card de produto para salvar nesta lista.
                     </p>
                     <button
-                      onClick={() => setActiveTab('all')}
+                      onClick={() => handleTabChange('all')}
                       className="mt-2 px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-glow-amber transition-all cursor-pointer"
                     >
                       Explorar Ofertas
@@ -897,6 +969,7 @@ export const AppContent: React.FC = () => {
       <Footer
         onLogoClick={handleResetFilters}
         onOpenAdmin={navigateToAdmin}
+        onOpenCoupons={() => handleTabChange('coupons')}
       />
 
       {/* Product Route Not Found Fallback Modal */}

@@ -6,7 +6,8 @@ import {
   CheckCircle2, 
   FileText, 
   Mail, 
-  Info 
+  Info,
+  Tag 
 } from 'lucide-react';
 import { InstitutionalModal, InstitutionalPageType } from './InstitutionalModal';
 
@@ -14,12 +15,14 @@ interface FooterProps {
   onLogoClick?: () => void;
   onOpenInstitutional?: (page: InstitutionalPageType) => void;
   onOpenAdmin?: () => void;
+  onOpenCoupons?: () => void;
 }
 
 export const Footer: React.FC<FooterProps> = ({ 
   onLogoClick, 
   onOpenInstitutional,
-  onOpenAdmin 
+  onOpenAdmin,
+  onOpenCoupons
 }) => {
   const [internalModalPage, setInternalModalPage] = useState<InstitutionalPageType | null>(null);
 
@@ -75,6 +78,21 @@ export const Footer: React.FC<FooterProps> = ({
                 <span>Kit Confiança</span>
               </h4>
               <ul className="space-y-2.5 text-xs font-medium">
+                <li>
+                  <a
+                    href="/cupons"
+                    onClick={(e) => {
+                      if (onOpenCoupons) {
+                        e.preventDefault();
+                        onOpenCoupons();
+                      }
+                    }}
+                    className="hover:text-amber-400 transition-colors flex items-center gap-1.5 text-left group"
+                  >
+                    <Tag className="w-3.5 h-3.5 text-slate-500 group-hover:text-amber-400 transition-colors" />
+                    <span>Central de Cupons</span>
+                  </a>
+                </li>
                 <li>
                   <button
                     onClick={() => handleOpenPage('sobre')}
