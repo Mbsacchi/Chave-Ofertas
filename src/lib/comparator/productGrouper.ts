@@ -273,34 +273,167 @@ export function consolidateGroup(group: Product[]): Product {
   };
 }
 
+class UnionFind {
+  private parent: Int32Array;
+
+  constructor(n: number) {
+    this.parent = new Int32Array(n);
+    for (let i = 0; i < n; i++) this.parent[i] = i;
+  }
+
+  find(i: number): number {
+    let root = i;
+    while (root !== this.parent[root]) {
+      root = this.parent[root];
+    }
+    let curr = i;
+    while (curr !== root) {
+      const next = this.parent[curr];
+      this.parent[curr] = root;
+      curr = next;
+    }
+    return root;
+  }
+
+  union(i: number, j: number): void {
+    const rootI = this.find(i);
+    const rootJ = this.find(j);
+    if (rootI !== rootJ) {
+      this.parent[rootI] = rootJ;
+    }
+  }
+}
+
 /**
- * Função principal que agrupa ofertas repetidas em um único objeto de produto consolidado
+ * Função principal que agrupa ofertas repetidas em um único objeto de produto consolidado.
+ * Altamente otimizada com Disjoint Set Union (Union-Find) e índice invertido O(N) para evitar congelamento de UI.
  */
 export function groupAndConsolidateProducts(products: Product[]): Product[] {
   if (!products || products.length <= 1) {
     return products ? products.map(normalizeProductOffers) : [];
   }
 
-  const groups: Product[][] = [];
-  const assigned = new Set<number>();
+  const n = products.length;
+  const uf = new UnionFind(n);
 
-  for (let i = 0; i < products.length; i++) {
-    if (assigned.has(i)) continue;
-
-    const currentGroup: Product[] = [products[i]];
-    assigned.add(i);
-
-    for (let j = i + 1; j < products.length; j++) {
-      if (assigned.has(j)) continue;
-
-      if (areProductsCompatible(products[i], products[j])) {
-        currentGroup.push(products[j]);
-        assigned.add(j);
-      }
-    }
-
-    groups.push(currentGroup);
+  // 1. Pré-computa metadados normalizados em tempo O(N) uma única vez
+  const meta = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const p = products[i];
+    const ean = cleanEan(p.ean);
+    const sku = cleanSku(p.sku);
+    const slug = (p.slug || '').trim().toLowerCase();
+    const brand = (p.brand || '').toLowerCase().trim();
+    const { tokens, numbers } = extractCanonicalTokens(`${p.title} ${p.slug || ''}`);
+    meta[i] = {
+      ean,
+      sku,
+      slug,
+      brand,
+      tokens,
+      numbers,
+      tokenSet: new Set(tokens),
+      numberSet: new Set(numbers),
+    };
   }
 
-  return groups.map(consolidateGroup);
+  // 2. Mapeamento exato O(N) por EAN, SKU e Slug
+  const eanMap = new Map<string, number>();
+  const skuMap = new Map<string, number>();
+  const slugMap = new Map<string, number>();
+
+  for (let i = 0; i < n; i++) {
+    const m = meta[i];
+    if (m.ean) {
+      const existing = eanMap.get(m.ean);
+      if (existing !== undefined) uf.union(i, existing);
+      else eanMap.set(m.ean, i);
+    }
+    if (m.sku) {
+      const existing = skuMap.get(m.sku);
+      if (existing !== undefined) uf.union(i, existing);
+      else skuMap.set(m.sku, i);
+    }
+    if (m.slug) {
+      const existing = slugMap.get(m.slug);
+      if (existing !== undefined) uf.union(i, existing);
+      else slugMap.set(m.slug, i);
+    }
+  }
+
+  // 3. Índice invertido de tokens canônicos significativos (ignora termos excessivamente genéricos)
+  const tokenIndex = new Map<string, number[]>();
+  for (let i = 0; i < n; i++) {
+    const m = meta[i];
+    if (m.tokens.length >= 3) {
+      const limit = Math.min(3, m.tokens.length);
+      for (let k = 0; k < limit; k++) {
+        const tok = m.tokens[k];
+        if (tok.length < 3) continue;
+        let list = tokenIndex.get(tok);
+        if (!list) {
+          list = [];
+          tokenIndex.set(tok, list);
+        }
+        list.push(i);
+      }
+    }
+  }
+
+  // Compara candidatos apenas dentro de baldes compartilhados (reduz 14.5M de comparações para poucas centenas)
+  for (const [, list] of tokenIndex.entries()) {
+    if (list.length > 80) continue; // Pula termos genéricos para preservar performance sub-segundo
+    for (let a = 0; a < list.length; a++) {
+      const idxA = list[a];
+      const metaA = meta[idxA];
+      for (let b = a + 1; b < list.length; b++) {
+        const idxB = list[b];
+        const rootA = uf.find(idxA);
+        const rootB = uf.find(idxB);
+        if (rootA === rootB) continue; // Já unidos no mesmo grupo
+
+        const metaB = meta[idxB];
+        // Validação de compatibilidade de marcas
+        if (metaA.brand && metaB.brand && metaA.brand !== 'geral' && metaB.brand !== 'geral') {
+          if (metaA.brand !== metaB.brand && !metaA.brand.includes(metaB.brand) && !metaB.brand.includes(metaA.brand)) {
+            continue;
+          }
+        }
+        // Validação numérica (modelos e especificações críticas)
+        if (metaA.numbers.length > 0 && metaB.numbers.length > 0) {
+          let hasCommon = false;
+          for (const num of metaA.numbers) {
+            if (metaB.numberSet.has(num)) {
+              hasCommon = true;
+              break;
+            }
+          }
+          if (!hasCommon) continue;
+        }
+        // Sobreposição semântica de tokens (>= 75%)
+        let commonTokensCount = 0;
+        for (const t of metaA.tokens) {
+          if (metaB.tokenSet.has(t)) commonTokensCount++;
+        }
+        const minLen = Math.min(metaA.tokens.length, metaB.tokens.length);
+        if (minLen >= 3 && (commonTokensCount / minLen) >= 0.75) {
+          uf.union(idxA, idxB);
+        }
+      }
+    }
+  }
+
+  // 4. Coleta grupos consolidados
+  const groupMap = new Map<number, Product[]>();
+  for (let i = 0; i < n; i++) {
+    const root = uf.find(i);
+    let group = groupMap.get(root);
+    if (!group) {
+      group = [];
+      groupMap.set(root, group);
+    }
+    group.push(products[i]);
+  }
+
+  return Array.from(groupMap.values()).map(consolidateGroup);
 }

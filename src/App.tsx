@@ -86,8 +86,23 @@ export const AppContent: React.FC = () => {
     }
   }, [user]);
 
-  // Dynamic Live Database Products
-  const [liveCustomProducts, setLiveCustomProducts] = useState<Product[]>([]);
+  // Dynamic Live Database Products with SWR Instant Local Cache (0ms first paint)
+  const [liveCustomProducts, setLiveCustomProducts] = useState<Product[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('chave_vitrine_cache');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
+        }
+      } catch (e) {
+        console.warn('Erro ao carregar cache local de produtos:', e);
+      }
+    }
+    return [];
+  });
   // Dynamic Real Coupons from Supabase (sem mock)
   const [realCoupons, setRealCoupons] = useState<Coupon[]>([]);
   const [isLoadingCoupons, setIsLoadingCoupons] = useState(false);
@@ -112,14 +127,20 @@ export const AppContent: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Fetch products and real coupons from database on initial load
+  // Fetch products and real coupons from database on initial load with progressive rendering
   useEffect(() => {
     let isMounted = true;
 
     const loadDbData = async () => {
       try {
-        const dbProds = await fetchLiveDatabaseProducts();
-        if (isMounted) setLiveCustomProducts(dbProds);
+        const dbProds = await fetchLiveDatabaseProducts((initialBatch) => {
+          if (isMounted && initialBatch.length > 0) {
+            setLiveCustomProducts(initialBatch);
+          }
+        });
+        if (isMounted && dbProds.length > 0) {
+          setLiveCustomProducts(dbProds);
+        }
       } catch (err) {
         console.warn('Erro ao carregar produtos do banco:', err);
       }

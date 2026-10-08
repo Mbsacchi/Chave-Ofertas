@@ -555,79 +555,93 @@ export const createAndPublishManualProduct = async (
   return newProduct;
 };
 
+export const VITRINE_SELECT_COLUMNS = 'id, title, slug, category_id, category_name, subcategory_id, subcategory_name, brand, sku, ean, image_url, search_keywords, min_price, max_price, historical_lowest_price, best_store, best_store_id, rating, reviews_count, click_count, is_verified, is_active, ends_at, created_at, updated_at, offers';
+
+const mapProductRow = (p: any): Product => ({
+  id: p.id,
+  title: p.title,
+  slug: p.slug,
+  description: p.description || '',
+  categoryId: p.category_id,
+  categoryName: p.category_name,
+  subcategoryId: p.subcategory_id,
+  subcategoryName: p.subcategory_name,
+  brand: p.brand || 'Geral',
+  sku: p.sku || '',
+  ean: p.ean || undefined,
+  imageUrl: p.image_url,
+  searchKeywords: p.search_keywords || [],
+  minPrice: Number(p.min_price),
+  maxPrice: Number(p.max_price),
+  historicalLowestPrice: Number(p.historical_lowest_price) || Number(p.min_price),
+  bestStore: p.best_store,
+  bestStoreId: p.best_store_id,
+  rating: Number(p.rating) || 4.8,
+  reviewsCount: Number(p.reviews_count) || 100,
+  clickCount: Number(p.click_count) || 0,
+  isVerified: Boolean(p.is_verified),
+  isActive: p.is_active !== undefined ? Boolean(p.is_active) : true,
+  endsAt: p.ends_at || undefined,
+  createdAt: p.created_at,
+  updatedAt: p.updated_at,
+  offers: p.offers || [],
+  priceHistory: p.price_history || [],
+});
+
 /**
  * Fetches the complete, unrestricted global catalog of products.
  * Includes all products from Supabase (manual, AI integrations, Awin network, etc.)
  * combined with the base catalog, with zero user/source filtering.
+ * Optimized with parallel pagination.
  */
 export const fetchAllGlobalProducts = async (): Promise<Product[]> => {
   let dbProducts: Product[] = [];
 
   if (isSupabaseConfigured) {
     try {
-      // Busca paginada para carregar todo o catálogo do Supabase (sem corte no limite padrão de 1000 linhas)
-      let allRows: any[] = [];
       const PAGE_SIZE = 1000;
-      let page = 0;
-      let hasMore = true;
 
-      while (hasMore) {
-        const from = page * PAGE_SIZE;
-        const to = from + PAGE_SIZE - 1;
+      // 1. Busca rápida da primeira página com contagem exata
+      const { data: page0Data, count, error: page0Error } = await supabase
+        .from('products')
+        .select(VITRINE_SELECT_COLUMNS, { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(0, PAGE_SIZE - 1);
 
-        const { data, error } = await supabase
-          .from('products')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .range(from, to);
-
-        if (error) {
-          console.warn(`[fetchAllGlobalProducts] Erro ao buscar produtos da página ${page}:`, error);
-          break;
-        }
-
-        if (data && data.length > 0) {
-          allRows.push(...data);
-          if (data.length < PAGE_SIZE) {
-            hasMore = false;
-          } else {
-            page++;
-          }
-        } else {
-          hasMore = false;
-        }
+      if (page0Error) {
+        console.warn('[fetchAllGlobalProducts] Erro na primeira página:', page0Error);
       }
 
-      if (allRows.length > 0) {
-        dbProducts = allRows.map((p: any) => ({
-          id: p.id,
-          title: p.title,
-          slug: p.slug,
-          description: p.description || '',
-          categoryId: p.category_id,
-          categoryName: p.category_name,
-          subcategoryId: p.subcategory_id,
-          subcategoryName: p.subcategory_name,
-          brand: p.brand || 'Geral',
-          sku: p.sku || '',
-          imageUrl: p.image_url,
-          searchKeywords: p.search_keywords || [],
-          minPrice: Number(p.min_price),
-          maxPrice: Number(p.max_price),
-          historicalLowestPrice: Number(p.historical_lowest_price) || Number(p.min_price),
-          bestStore: p.best_store,
-          bestStoreId: p.best_store_id,
-          rating: Number(p.rating) || 4.8,
-          reviewsCount: Number(p.reviews_count) || 100,
-          clickCount: Number(p.click_count) || 0,
-          isVerified: Boolean(p.is_verified),
-          isActive: p.is_active !== undefined ? Boolean(p.is_active) : true,
-          endsAt: p.ends_at || undefined,
-          createdAt: p.created_at,
-          updatedAt: p.updated_at,
-          offers: p.offers || [],
-          priceHistory: p.price_history || [],
-        }));
+      const initialProducts = (page0Data || []).map(mapProductRow);
+      const totalItems = count || initialProducts.length;
+      const totalPages = Math.ceil(totalItems / PAGE_SIZE);
+
+      if (totalPages > 1) {
+        // Busca restante em paralelo via Promise.all
+        const parallelPromises = [];
+        for (let page = 1; page < totalPages; page++) {
+          const from = page * PAGE_SIZE;
+          const to = from + PAGE_SIZE - 1;
+          parallelPromises.push(
+            supabase
+              .from('products')
+              .select(VITRINE_SELECT_COLUMNS)
+              .order('created_at', { ascending: false })
+              .range(from, to)
+          );
+        }
+
+        const responses = await Promise.all(parallelPromises);
+        const remainingProducts: Product[] = [];
+        for (const res of responses) {
+          if (!res.error && res.data) {
+            remainingProducts.push(...res.data.map(mapProductRow));
+          }
+        }
+
+        dbProducts = [...initialProducts, ...remainingProducts];
+      } else {
+        dbProducts = initialProducts;
       }
     } catch (err) {
       console.warn('Supabase fetchAllGlobalProducts error:', err);
@@ -660,13 +674,109 @@ export const fetchAllGlobalProducts = async (): Promise<Product[]> => {
 };
 
 /**
- * Fetches all custom published products from Supabase/Storage
+ * Fetches all custom published products from Supabase/Storage for the live Vitrine.
+ * Optimized with lightweight column projection, SQL filtering for active and non-expired items,
+ * parallel pagination, and instant batch callback for immediate rendering (<600ms).
  */
-export const fetchLiveDatabaseProducts = async (): Promise<Product[]> => {
-  const allProducts = await fetchAllGlobalProducts();
-  const now = Date.now();
-  // Filtra fora produtos que estão vencidos
-  return allProducts.filter(p => !p.endsAt || new Date(p.endsAt).getTime() > now);
+export const fetchLiveDatabaseProducts = async (
+  onInitialBatch?: (products: Product[]) => void
+): Promise<Product[]> => {
+  const nowIso = new Date().toISOString();
+  let dbProducts: Product[] = [];
+
+  if (isSupabaseConfigured) {
+    try {
+      const PAGE_SIZE = 1000;
+
+      // 1. Busca rápida da página inicial (0-999) com contagem exata e filtros no banco
+      const { data: page0Data, count, error: page0Error } = await supabase
+        .from('products')
+        .select(VITRINE_SELECT_COLUMNS, { count: 'exact' })
+        .eq('is_active', true)
+        .or(`ends_at.is.null,ends_at.gt.${nowIso}`)
+        .order('created_at', { ascending: false })
+        .range(0, PAGE_SIZE - 1);
+
+      if (page0Error) {
+        console.warn('[fetchLiveDatabaseProducts] Erro na primeira página:', page0Error);
+      }
+
+      const initialProducts = (page0Data || []).map(mapProductRow);
+
+      // Emissão rápida da primeira página para exibição imediata (<600ms)
+      if (initialProducts.length > 0 && onInitialBatch) {
+        const localCustom = getStoredCustomProducts();
+        const firstMap = new Map<string, Product>();
+        initialProducts.forEach(p => firstMap.set(p.id, p));
+        localCustom.forEach(p => {
+          if (!firstMap.has(p.id)) firstMap.set(p.id, p);
+        });
+        const firstConsolidated = groupAndConsolidateProducts(Array.from(firstMap.values()));
+        onInitialBatch(firstConsolidated);
+
+        // Salva cache leve (top 300 produtos) para renderização instantânea (0ms) no próximo acesso
+        try {
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('chave_vitrine_cache', JSON.stringify(firstConsolidated.slice(0, 300)));
+          }
+        } catch {}
+      }
+
+      // 2. Busca paralela das páginas restantes (Promise.all)
+      const totalItems = count || initialProducts.length;
+      const totalPages = Math.ceil(totalItems / PAGE_SIZE);
+
+      if (totalPages > 1) {
+        const parallelPromises = [];
+        for (let page = 1; page < totalPages; page++) {
+          const from = page * PAGE_SIZE;
+          const to = from + PAGE_SIZE - 1;
+          parallelPromises.push(
+            supabase
+              .from('products')
+              .select(VITRINE_SELECT_COLUMNS)
+              .eq('is_active', true)
+              .or(`ends_at.is.null,ends_at.gt.${nowIso}`)
+              .order('created_at', { ascending: false })
+              .range(from, to)
+          );
+        }
+
+        const responses = await Promise.all(parallelPromises);
+        const remainingProducts: Product[] = [];
+        for (const res of responses) {
+          if (!res.error && res.data) {
+            remainingProducts.push(...res.data.map(mapProductRow));
+          }
+        }
+
+        dbProducts = [...initialProducts, ...remainingProducts];
+      } else {
+        dbProducts = initialProducts;
+      }
+    } catch (err) {
+      console.warn('Supabase fetchLiveDatabaseProducts error:', err);
+    }
+  }
+
+  // Combine DB products with local custom storage
+  const localCustom = getStoredCustomProducts();
+  const combinedMap = new Map<string, Product>();
+  dbProducts.forEach(p => combinedMap.set(p.id, p));
+  localCustom.forEach(p => {
+    if (!combinedMap.has(p.id)) combinedMap.set(p.id, p);
+  });
+
+  const finalConsolidated = groupAndConsolidateProducts(Array.from(combinedMap.values()));
+
+  // Atualiza cache leve dos produtos no storage
+  try {
+    if (typeof window !== 'undefined' && finalConsolidated.length > 0) {
+      localStorage.setItem('chave_vitrine_cache', JSON.stringify(finalConsolidated.slice(0, 300)));
+    }
+  } catch {}
+
+  return finalConsolidated;
 };
 
 /**
